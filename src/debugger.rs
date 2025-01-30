@@ -1,6 +1,8 @@
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::ffi::OsStr;
+use std::fs;
+use std::io::{self, Read, Seek};
 use std::mem;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
@@ -13,6 +15,8 @@ use crate::utils::exit_status_sentinel::check;
 use crate::var::{Var, VarType};
 
 use anyhow::{anyhow, bail, Result};
+
+const READ_MEM_BUF_SIZE: usize = 512;
 
 #[derive(Debug, Clone)]
 pub struct Breakpoint {
@@ -467,6 +471,7 @@ impl<R: gimli::Reader> Debugger<R> {
     fn get_eval_result(&self, eval: gimli::Evaluation<R>) -> Result<u64> {
         let pieces = eval.result();
 
+        // todo
         assert!(pieces.len() == 1);
         assert!(pieces[0].size_in_bits.is_none());
 
@@ -544,33 +549,48 @@ impl<R: gimli::Reader> Debugger<R> {
                             .u8_value()
                             .ok_or(anyhow!("convert byte size to u8"))?;
 
-                        Ok(VarType {
-                            byte_size,
-                            encoding,
-                            description: name,
-                        })
+                        Ok(VarType::Base { byte_size, encoding, name })
                     }
                     gimli::DW_TAG_const_type => {
                         let type_attr = entry.attr_value(gimli::DW_AT_type)?.ok_or(anyhow!("get type attr value"))?;
-                        let mut var_type = self.get_var_type_value(unit_ref, type_attr)?;
-                        var_type.description.insert_str(0, "const ");
+                        let sub_type = self.get_var_type_value(unit_ref, type_attr)?;
 
-                        Ok(var_type)
+                        Ok(VarType::Const(Box::new(sub_type)))
                     }
                     gimli::DW_TAG_pointer_type => {
                         let type_attr = entry.attr_value(gimli::DW_AT_type)?.ok_or(anyhow!("get type attr value"))?;
-                        let var_type = self.get_var_type_value(unit_ref, type_attr)?;
+                        let sub_type = self.get_var_type_value(unit_ref, type_attr)?;
 
-                        Ok(VarType {
-                            byte_size: 8,
-                            encoding: gimli::DW_ATE_address,
-                            description: var_type.description + "*",
-                        })
+                        Ok(VarType::Pointer(Box::new(sub_type)))
                     }
                     _ => bail!("unexpected tag type"),
                 }
             }
             _ => bail!("unknown type"),
+        }
+    }
+
+    pub fn read_c_string_at(&self, addr: u64) -> Result<String> {
+        log::trace!("read c string at {:#x}", addr);
+
+        let mut buf = Vec::new();
+        let mut read_buf = [0; READ_MEM_BUF_SIZE];
+
+        // todo maybe process_vm_readv
+        let mut procmem = fs::File::open(format!("/proc/{}/mem", self.child_pid()))?;
+        procmem.seek(io::SeekFrom::Start(addr))?;
+
+        loop {
+            let n = procmem.read(&mut read_buf)?;
+
+            match read_buf[..n].iter().position(|&b| b == 0) {
+                Some(pos) => {
+                    buf.extend_from_slice(&read_buf[..pos]);
+                    let s = String::from_utf8(buf)?;
+                    return Ok(s);
+                }
+                None => buf.extend_from_slice(&read_buf),
+            }
         }
     }
 }

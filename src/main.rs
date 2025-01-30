@@ -6,6 +6,7 @@ mod loc_finder;
 mod unwinder;
 mod utils;
 mod var;
+mod printer;
 
 use std::{io::Write, path::Path};
 

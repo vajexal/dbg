@@ -1,8 +1,21 @@
 #[derive(Debug)]
-pub struct VarType {
-    pub byte_size: u8,
-    pub encoding: gimli::DwAte,
-    pub description: String,
+pub enum VarType {
+    Base { 
+        byte_size: u8, 
+        encoding: gimli::DwAte, 
+        name: String 
+    },
+    Const(Box<VarType>),
+    Pointer(Box<VarType>),
+}
+
+impl VarType {
+    pub fn unwind(&self) -> &Self {
+        match self {
+            VarType::Const(var_type) => var_type.unwind(),
+            typ => typ,
+        }
+    }
 }
 
 #[derive(Debug)]
