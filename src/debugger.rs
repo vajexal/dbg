@@ -12,10 +12,12 @@ use std::rc::Rc;
 use crate::loc_finder::{EntryRef, LocFinder};
 use crate::unwinder::Unwinder;
 use crate::utils::exit_status_sentinel::check;
-use crate::var::{Var, VarType};
+use crate::var::{Field, Var, VarType};
 
 use anyhow::{anyhow, bail, Result};
+use bytes::{BufMut, Bytes};
 
+pub const WORD_SIZE: usize = 8;
 const READ_MEM_BUF_SIZE: usize = 512;
 
 #[derive(Debug, Clone)]
@@ -369,7 +371,7 @@ impl<R: gimli::Reader> Debugger<R> {
         Ok(())
     }
 
-    pub fn get_vars(&self) -> Result<Vec<Var>> {
+    pub fn get_vars(&self) -> Result<Vec<Var<R>>> {
         let ip = self.get_ip()?;
         let current_func = self.loc_finder.find_func_by_address(ip).ok_or(anyhow!("get current func"))?;
         let mut vars = Vec::new();
@@ -382,7 +384,7 @@ impl<R: gimli::Reader> Debugger<R> {
         Ok(vars)
     }
 
-    pub fn get_var(&self, name: &str) -> Result<Option<Var>> {
+    pub fn get_var(&self, name: &str) -> Result<Option<Var<R>>> {
         let ip = self.get_ip()?;
         let entry_ref = match self.loc_finder.get_var(name, ip) {
             Some(entry_ref) => entry_ref,
@@ -395,7 +397,7 @@ impl<R: gimli::Reader> Debugger<R> {
         Ok(Some(var))
     }
 
-    fn get_var_by_entry_ref(&self, name: &str, func: &str, entry_ref: &EntryRef<R::Offset>) -> Result<Var> {
+    fn get_var_by_entry_ref(&self, name: &str, func: &str, entry_ref: &EntryRef<R::Offset>) -> Result<Var<R>> {
         let unit_header = self.dwarf.debug_info.header_from_offset(entry_ref.unit_offset)?;
         let unit = self.dwarf.unit(unit_header)?;
         let entry = unit.entry(entry_ref.entry_offset)?;
@@ -406,12 +408,15 @@ impl<R: gimli::Reader> Debugger<R> {
         let location = entry.attr_value(gimli::DW_AT_location)?.ok_or(anyhow!("get location attr"))?;
         let expr = location.exprloc_value().ok_or(anyhow!("get exprloc"))?;
         let evaluation = self.eval_expr(expr, &unit_ref, func)?;
-        let value = self.get_eval_result(evaluation)?;
+        let mut pieces = evaluation.result();
+        if !(pieces.len() == 1 && pieces[0].size_in_bits.is_none()) {
+            bail!("can't read composite location");
+        }
 
         Ok(Var {
             name: name.to_string(),
             typ: var_type,
-            value,
+            location: pieces.remove(0).location,
         })
     }
 
@@ -466,24 +471,6 @@ impl<R: gimli::Reader> Debugger<R> {
         }
 
         Ok(eval)
-    }
-
-    fn get_eval_result(&self, eval: gimli::Evaluation<R>) -> Result<u64> {
-        let pieces = eval.result();
-
-        // todo
-        assert!(pieces.len() == 1);
-        assert!(pieces[0].size_in_bits.is_none());
-
-        match pieces[0].location {
-            gimli::Location::Register { register } => self.get_register_value(register),
-            gimli::Location::Address { address } => {
-                let data = check(unsafe { libc::ptrace(libc::PTRACE_PEEKTEXT, self.child_pid(), address, std::ptr::null_mut::<i8>()) })?;
-                Ok(data as u64)
-            }
-            gimli::Location::Value { value } => Ok(value.to_u64(!0u64)?),
-            _ => bail!("read location {:?}", pieces[0].location),
-        }
     }
 
     fn get_register_value(&self, register: gimli::Register) -> Result<u64> {
@@ -546,10 +533,14 @@ impl<R: gimli::Reader> Debugger<R> {
                         let byte_size = entry
                             .attr_value(gimli::DW_AT_byte_size)?
                             .ok_or(anyhow!("get byte size value"))?
-                            .u8_value()
+                            .u16_value()
                             .ok_or(anyhow!("convert byte size to u8"))?;
 
-                        Ok(VarType::Base { byte_size, encoding, name })
+                        Ok(VarType::Base {
+                            name,
+                            encoding,
+                            size: byte_size,
+                        })
                     }
                     gimli::DW_TAG_const_type => {
                         let type_attr = entry.attr_value(gimli::DW_AT_type)?.ok_or(anyhow!("get type attr value"))?;
@@ -562,6 +553,49 @@ impl<R: gimli::Reader> Debugger<R> {
                         let sub_type = self.get_var_type_value(unit_ref, type_attr)?;
 
                         Ok(VarType::Pointer(Box::new(sub_type)))
+                    }
+                    gimli::DW_TAG_structure_type => {
+                        let name_attr = entry.attr_value(gimli::DW_AT_name)?.ok_or(anyhow!("get name attr value"))?;
+                        let name = unit_ref.attr_string(name_attr)?.to_string()?.to_string();
+
+                        let byte_size = entry
+                            .attr_value(gimli::DW_AT_byte_size)?
+                            .ok_or(anyhow!("get byte size value"))?
+                            .u16_value()
+                            .ok_or(anyhow!("convert byte size to u8"))?;
+
+                        let mut fields = Vec::new();
+
+                        let mut tree = unit_ref.entries_tree(Some(offset))?;
+                        let root = tree.root()?;
+                        let mut children = root.children();
+                        while let Some(child) = children.next()? {
+                            let child_entry = child.entry();
+                            if child_entry.tag() != gimli::DW_TAG_member {
+                                continue;
+                            }
+
+                            let member_name_attr = child_entry.attr_value(gimli::DW_AT_name)?.ok_or(anyhow!("get name attr value"))?;
+                            let member_name = unit_ref.attr_string(member_name_attr)?.to_string()?.to_string();
+
+                            // todo location
+                            let member_location = child_entry
+                                .attr_value(gimli::DW_AT_data_member_location)?
+                                .ok_or(anyhow!("get data member location attr value"))?
+                                .u16_value()
+                                .ok_or(anyhow!("convert data member location to u8"))?;
+
+                            let member_type_attr = child_entry.attr_value(gimli::DW_AT_type)?.ok_or(anyhow!("get type attr value"))?;
+                            let member_type = self.get_var_type_value(unit_ref, member_type_attr)?;
+
+                            fields.push(Field {
+                                name: member_name,
+                                typ: member_type,
+                                offset: member_location,
+                            });
+                        }
+
+                        Ok(VarType::Struct { name, size: byte_size, fields })
                     }
                     _ => bail!("unexpected tag type"),
                 }
@@ -592,5 +626,38 @@ impl<R: gimli::Reader> Debugger<R> {
                 None => buf.extend_from_slice(&read_buf),
             }
         }
+    }
+
+    pub fn read_location(&self, location: &gimli::Location<R>, size: usize) -> Result<Bytes> {
+        log::trace!("read {} bytes from {:?}", size, location);
+
+        let mut buf = vec![0; size];
+
+        match location {
+            gimli::Location::Register { register } => {
+                if size > WORD_SIZE {
+                    bail!("too many bytes to read")
+                }
+                let value = self.get_register_value(*register)?;
+                buf.put_u64_ne(value);
+            }
+            gimli::Location::Address { address } => {
+                // todo maybe process_vm_readv
+                let mut procmem = fs::File::open(format!("/proc/{}/mem", self.child_pid()))?;
+                procmem.seek(io::SeekFrom::Start(*address))?;
+                procmem.read_exact(buf.as_mut_slice())?;
+            }
+            gimli::Location::Value { value } => {
+                if size > WORD_SIZE {
+                    bail!("too many bytes to read")
+                }
+                let value = value.to_u64(!0u64)?;
+                buf.put_u64_ne(value);
+            }
+            gimli::Location::Bytes { value } => buf.extend_from_slice(&value.to_slice()?),
+            _ => bail!("can't read location {:?}", location),
+        }
+
+        Ok(buf.into())
     }
 }

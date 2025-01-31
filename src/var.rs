@@ -1,12 +1,16 @@
 #[derive(Debug)]
 pub enum VarType {
-    Base { 
-        byte_size: u8, 
-        encoding: gimli::DwAte, 
-        name: String 
-    },
+    Base { name: String, encoding: gimli::DwAte, size: u16 },
     Const(Box<VarType>),
     Pointer(Box<VarType>),
+    Struct { name: String, size: u16, fields: Vec<Field> },
+}
+
+#[derive(Debug)]
+pub struct Field {
+    pub name: String,
+    pub typ: VarType,
+    pub offset: u16,
 }
 
 impl VarType {
@@ -19,8 +23,8 @@ impl VarType {
 }
 
 #[derive(Debug)]
-pub struct Var {
+pub struct Var<R: gimli::Reader> {
     pub typ: VarType,
     pub name: String,
-    pub value: u64, // todo
+    pub location: gimli::Location<R>,
 }
