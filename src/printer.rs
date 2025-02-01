@@ -4,7 +4,7 @@ use anyhow::{bail, Result};
 use bytes::{Buf, Bytes};
 use thiserror::Error;
 
-use crate::debugger::{Debugger, WORD_SIZE};
+use crate::debugger::Debugger;
 use crate::var::{Field, Var, VarType};
 
 #[derive(Error, Debug)]
@@ -24,7 +24,8 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
         let mut lock = io::stdout().lock();
 
         self.print_type(&mut lock, &var.typ, path)?;
-        write!(lock, " {} = ", var.name)?;
+        let name = path.last().copied().unwrap_or(var.name.as_str());
+        write!(lock, " {} = ", name)?;
         self.print_value(&mut lock, var, path)?;
         write!(lock, "\n")?;
 
@@ -63,24 +64,29 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                     }
                 }
             }
+            VarType::Typedef(name, var_type) => {
+                if path.is_empty() {
+                    write!(f, "{}", name)?;
+                } else {
+                    self.print_type(f, var_type, path)?;
+                }
+            }
         }
 
         Ok(())
     }
 
     fn print_value(&self, f: &mut impl io::Write, var: &Var<R>, path: &[&str]) -> Result<()> {
-        let size = match var.typ.unwind() {
-            VarType::Base { size, .. } => *size as usize,
-            VarType::Const(_) => panic!("can't get const type size"),
-            VarType::Pointer(_) => WORD_SIZE,
-            VarType::Struct { size, .. } => *size as usize,
-        };
-
+        let size = var.typ.get_size();
         let buf = self.debugger.read_location(&var.location, size)?;
         self.print_bytes(f, buf, &var.typ, path)
     }
 
     fn print_bytes(&self, f: &mut impl io::Write, mut buf: Bytes, var_type: &VarType, path: &[&str]) -> Result<()> {
+        if Self::is_c_string_type(var_type) {
+            return self.print_c_string(f, buf, path);
+        }
+
         match var_type {
             VarType::Base { encoding, size, .. } => {
                 if !path.is_empty() {
@@ -106,7 +112,7 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                     _ => bail!("unsupported encoding"),
                 };
             }
-            VarType::Const(var_type) => self.print_bytes(f, buf, var_type.as_ref(), path)?,
+            VarType::Const(var_type) => self.print_bytes(f, buf, var_type, path)?,
             VarType::Pointer(var_type) => {
                 if !path.is_empty() {
                     // todo follow fields behind pointer
@@ -114,16 +120,6 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                 }
 
                 let ptr = buf.get_u64_ne();
-
-                // check for char*
-                if let VarType::Base { encoding, .. } = var_type.unwind() {
-                    if *encoding == gimli::DW_ATE_signed_char {
-                        let s = self.debugger.read_c_string_at(ptr)?;
-                        write!(f, "{:?}", s)?;
-                        return Ok(());
-                    }
-                }
-
                 write!(f, "{:#x}", ptr)?
             }
             VarType::Struct { fields, .. } => {
@@ -136,6 +132,7 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                     }
                 }
             }
+            VarType::Typedef(_, var_type) => self.print_bytes(f, buf, var_type, path)?,
         };
 
         Ok(())
@@ -154,6 +151,30 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
         }
 
         write!(f, " }}")?;
+
+        Ok(())
+    }
+
+    fn is_c_string_type(var_type: &VarType) -> bool {
+        if let VarType::Pointer(sub_type) = var_type {
+            if let VarType::Base { encoding, .. } = sub_type.unwind_const() {
+                if *encoding == gimli::DW_ATE_signed_char {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    fn print_c_string(&self, f: &mut impl io::Write, mut buf: Bytes, path: &[&str]) -> Result<()> {
+        if !path.is_empty() {
+            bail!(InvalidPathError);
+        }
+
+        let ptr = buf.get_u64_ne();
+        let s = self.debugger.read_c_string_at(ptr)?;
+        write!(f, "{:?}", s)?;
 
         Ok(())
     }

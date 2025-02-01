@@ -555,8 +555,11 @@ impl<R: gimli::Reader> Debugger<R> {
                         Ok(VarType::Pointer(Box::new(sub_type)))
                     }
                     gimli::DW_TAG_structure_type => {
-                        let name_attr = entry.attr_value(gimli::DW_AT_name)?.ok_or(anyhow!("get name attr value"))?;
-                        let name = unit_ref.attr_string(name_attr)?.to_string()?.to_string();
+                        // struct could be anonymous
+                        let name = match entry.attr_value(gimli::DW_AT_name)? {
+                            Some(value) => unit_ref.attr_string(value)?.to_string()?.to_string(),
+                            None => String::new(),
+                        };
 
                         let byte_size = entry
                             .attr_value(gimli::DW_AT_byte_size)?
@@ -596,6 +599,15 @@ impl<R: gimli::Reader> Debugger<R> {
                         }
 
                         Ok(VarType::Struct { name, size: byte_size, fields })
+                    },
+                    gimli::DW_TAG_typedef => {
+                        let name_attr = entry.attr_value(gimli::DW_AT_name)?.ok_or(anyhow!("get name attr value"))?;
+                        let name = unit_ref.attr_string(name_attr)?.to_string()?.to_string();
+
+                        let type_attr = entry.attr_value(gimli::DW_AT_type)?.ok_or(anyhow!("get type attr value"))?;
+                        let sub_type = self.get_var_type_value(unit_ref, type_attr)?;
+
+                        Ok(VarType::Typedef(name, Box::new(sub_type)))
                     }
                     _ => bail!("unexpected tag type"),
                 }
