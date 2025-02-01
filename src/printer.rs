@@ -109,6 +109,11 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                         8 => write!(f, "{}", buf.get_u64_ne())?,
                         _ => bail!("unsupported byte size"),
                     },
+                    gimli::DW_ATE_float => match size {
+                        4 => write!(f, "{}", buf.get_f32_ne())?,
+                        8 => write!(f, "{}", buf.get_f64_ne())?,
+                        _ => bail!("unsupported byte size"),
+                    }
                     _ => bail!("unsupported encoding"),
                 };
             }
