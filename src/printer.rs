@@ -113,14 +113,18 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                 };
             }
             VarType::Const(var_type) => self.print_bytes(f, buf, var_type, path)?,
-            VarType::Pointer(var_type) => {
+            VarType::Pointer(_) => {
                 if !path.is_empty() {
                     // todo follow fields behind pointer
                     bail!(InvalidPathError);
                 }
 
                 let ptr = buf.get_u64_ne();
-                write!(f, "{:#x}", ptr)?
+                if ptr == 0 {
+                    write!(f, "null")?;
+                } else {
+                    write!(f, "{:#x}", ptr)?;
+                }
             }
             VarType::Struct { fields, .. } => {
                 if path.is_empty() {
