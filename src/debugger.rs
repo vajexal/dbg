@@ -9,7 +9,7 @@ use std::path::Path;
 use std::process;
 use std::rc::Rc;
 
-use crate::loc_finder::{EntryRef, LocFinder};
+use crate::loc_finder::{EntryRef, LocFinder, LocNotFound};
 use crate::unwinder::Unwinder;
 use crate::utils::exit_status_sentinel::check;
 use crate::var::{Field, Var, VarType};
@@ -40,6 +40,7 @@ impl Breakpoint {
 }
 
 pub struct Debugger<R: gimli::Reader> {
+    state: Cell<DebuggerState>,
     dwarf: gimli::Dwarf<R>,
     unwinder: Unwinder<R>,
     loc_finder: LocFinder<R>,
@@ -49,8 +50,9 @@ pub struct Debugger<R: gimli::Reader> {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DebuggerState {
-    Exited,
+    Started,
     Running,
+    Exited,
 }
 
 impl<R: gimli::Reader> Debugger<R> {
@@ -75,6 +77,7 @@ impl<R: gimli::Reader> Debugger<R> {
         let child = command.args(args).spawn()?;
 
         let debugger = Self {
+            state: Cell::new(DebuggerState::Exited),
             dwarf,
             unwinder,
             loc_finder,
@@ -84,6 +87,8 @@ impl<R: gimli::Reader> Debugger<R> {
 
         let _ = debugger.wait()?;
 
+        debugger.state.set(DebuggerState::Started);
+
         Ok(debugger)
     }
 
@@ -91,19 +96,27 @@ impl<R: gimli::Reader> Debugger<R> {
         self.child.id() as libc::pid_t
     }
 
+    pub fn get_state(&self) -> DebuggerState {
+        self.state.get()
+    }
+
     pub fn run(&self) -> Result<()> {
         check(unsafe { libc::ptrace(libc::PTRACE_CONT, self.child_pid(), std::ptr::null_mut::<i8>(), std::ptr::null_mut::<i8>()) })?;
+
+        self.state.set(DebuggerState::Running);
 
         Ok(())
     }
 
-    pub fn stop(&mut self) -> Result<DebuggerState> {
+    pub fn stop(&mut self) -> Result<()> {
         self.child.kill()?;
 
-        Ok(DebuggerState::Exited)
+        self.state.set(DebuggerState::Exited);
+
+        Ok(())
     }
 
-    pub fn wait(&self) -> Result<DebuggerState> {
+    pub fn wait(&self) -> Result<()> {
         log::trace!("wait for signal");
 
         let mut status: libc::c_int = 0;
@@ -112,15 +125,16 @@ impl<R: gimli::Reader> Debugger<R> {
 
         if libc::WIFEXITED(status) {
             log::trace!("child exited");
-            return Ok(DebuggerState::Exited);
+            self.state.set(DebuggerState::Exited);
+            return Ok(());
         }
 
         log::trace!("stopped at {:#x}", self.get_ip()?);
-
-        Ok(DebuggerState::Running)
+        self.state.set(DebuggerState::Running);
+        Ok(())
     }
 
-    pub fn cont(&mut self) -> Result<DebuggerState> {
+    pub fn cont(&mut self) -> Result<()> {
         log::trace!("continue");
 
         // find breakpoint
@@ -134,22 +148,22 @@ impl<R: gimli::Reader> Debugger<R> {
 
             self.disable_breakpoint(breakpoint)?;
             self.rewind()?;
+            self.single_step()?;
 
-            if self.single_step()? == DebuggerState::Exited {
-                return Ok(DebuggerState::Exited);
+            if self.get_state() == DebuggerState::Exited {
+                return Ok(());
             }
 
             self.enable_breakpoint(breakpoint)?;
         }
 
         log::trace!("continue from {:#x}", self.get_ip()?);
-
         check(unsafe { libc::ptrace(libc::PTRACE_CONT, self.child_pid(), std::ptr::null_mut::<i8>(), std::ptr::null_mut::<i8>()) })?;
-
-        Ok(DebuggerState::Running)
+        self.state.set(DebuggerState::Running);
+        Ok(())
     }
 
-    fn single_step(&self) -> Result<DebuggerState> {
+    fn single_step(&self) -> Result<()> {
         check(unsafe {
             libc::ptrace(
                 libc::PTRACE_SINGLESTEP,
@@ -162,78 +176,71 @@ impl<R: gimli::Reader> Debugger<R> {
         self.wait()
     }
 
-    pub fn step(&self) -> Result<DebuggerState> {
+    pub fn step(&self) -> Result<()> {
         let start_bp = self.get_bp()?;
-
         let start_line = self.get_current_line()?.ok_or(anyhow!("can't find start line"))?;
-
         log::trace!("step from {}", start_line);
 
         loop {
-            match self.single_step()? {
-                DebuggerState::Exited => return Ok(DebuggerState::Exited),
+            self.single_step()?;
+            match self.get_state() {
+                DebuggerState::Started => panic!("child is not running"),
                 DebuggerState::Running => {
                     let bp = self.get_bp()?;
-
                     if bp < start_bp {
                         // stepped inside function
                         continue;
                     }
 
-                    match self.get_current_line()? {
-                        Some(line) => {
-                            if line != start_line {
-                                log::trace!("stepped to {}", line);
-
-                                return Ok(DebuggerState::Running);
-                            }
+                    if let Some(line) = self.get_current_line()? {
+                        if line != start_line {
+                            log::trace!("stepped to {}", line);
+                            return Ok(());
                         }
-                        None => (),
                     }
                 }
+                DebuggerState::Exited => return Ok(()),
             }
         }
     }
 
-    pub fn step_in(&self) -> Result<DebuggerState> {
+    pub fn step_in(&self) -> Result<()> {
         let start_line = self.get_current_line()?.ok_or(anyhow!("can't find start line"))?;
-
         log::trace!("step in from {}", start_line);
 
         loop {
-            match self.single_step()? {
-                DebuggerState::Exited => return Ok(DebuggerState::Exited),
-                DebuggerState::Running => match self.get_current_line()? {
-                    Some(line) => {
+            self.single_step()?;
+            match self.get_state() {
+                DebuggerState::Started => panic!("child is not running"),
+                DebuggerState::Running => {
+                    if let Some(line) = self.get_current_line()? {
                         if line != start_line {
                             log::trace!("stepped in to {}", line);
-
-                            return Ok(DebuggerState::Running);
+                            return Ok(());
                         }
                     }
-                    None => (),
-                },
+                }
+                DebuggerState::Exited => return Ok(()),
             }
         }
     }
 
-    pub fn step_out(&self) -> Result<DebuggerState> {
+    pub fn step_out(&self) -> Result<()> {
         let start_bp = self.get_bp()?;
-
         log::trace!("step out start bp {:#x}", start_bp);
 
         loop {
-            match self.single_step()? {
-                DebuggerState::Exited => return Ok(DebuggerState::Exited),
+            self.single_step()?;
+            match self.get_state() {
+                DebuggerState::Started => panic!("child is not running"),
                 DebuggerState::Running => {
                     let bp = self.get_bp()?;
-
                     if bp > start_bp {
                         log::trace!("step out stop bp {:#x}", bp);
-
-                        return Ok(DebuggerState::Running);
+                        return Ok(());
                     }
                 }
+                DebuggerState::Exited => return Ok(()),
             }
         }
     }
@@ -302,10 +309,14 @@ impl<R: gimli::Reader> Debugger<R> {
         S: Into<Cow<'a, str>>,
     {
         let loc = loc.into().into_owned();
-        let addr = match self.loc_finder.find_loc(&loc) {
-            Some(value) => value,
-            None => bail!("loc not found"),
-        };
+        let addr = self
+            .loc_finder
+            .find_loc(&loc, || match self.get_state() {
+                DebuggerState::Started => Ok(None),
+                DebuggerState::Running => Ok(Some(self.get_ip()?)),
+                DebuggerState::Exited => panic!("can't get ip"),
+            })?
+            .ok_or(LocNotFound)?;
 
         log::trace!("set breakpoint at {:#x}", addr);
 
@@ -599,7 +610,7 @@ impl<R: gimli::Reader> Debugger<R> {
                         }
 
                         Ok(VarType::Struct { name, size: byte_size, fields })
-                    },
+                    }
                     gimli::DW_TAG_typedef => {
                         let name_attr = entry.attr_value(gimli::DW_AT_name)?.ok_or(anyhow!("get name attr value"))?;
                         let name = unit_ref.attr_string(name_attr)?.to_string()?.to_string();

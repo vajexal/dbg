@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 
 use crate::debugger::Debugger;
+use crate::loc_finder::LocNotFound;
 use anyhow::Result;
 
 pub fn add<'a, R, S>(debugger: &mut Debugger<R>, loc: S) -> Result<()>
@@ -8,7 +9,14 @@ where
     R: gimli::Reader,
     S: Into<Cow<'a, str>>,
 {
-    debugger.add_breakpoint(loc)
+    if let Err(e) = debugger.add_breakpoint(loc) {
+        match e.downcast_ref::<LocNotFound>() {
+            Some(_) => println!("loc not found"),
+            None => return Err(e),
+        }
+    }
+
+    Ok(())
 }
 
 pub fn remove<R: gimli::Reader>(debugger: &mut Debugger<R>, index: usize) -> Result<()> {

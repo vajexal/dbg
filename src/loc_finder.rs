@@ -2,8 +2,15 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use anyhow::{anyhow, bail, Result};
+use thiserror::Error;
 
 use crate::utils::ranges::Ranges;
+
+const MAIN_FUNC_NAME: &str = "main";
+
+#[derive(Debug, Error)]
+#[error("loc not found")]
+pub struct LocNotFound;
 
 #[derive(Debug)]
 pub struct EntryRef<Offset: gimli::ReaderOffset> {
@@ -24,6 +31,8 @@ pub struct LocFinder<R: gimli::Reader> {
     lines: HashMap<u64, Rc<str>>,     // address -> line number
     funcs: HashMap<Rc<str>, EntryRef<R::Offset>>,
     func_ranges: Ranges<Rc<str>>,
+    unit_ranges: Ranges<Rc<str>>,
+    main_unit: Option<Rc<str>>, // unit where main func is located
     func_variables: HashMap<Rc<str>, HashMap<Rc<str>, EntryRef<R::Offset>>>,
     global_variables: HashMap<Rc<str>, EntryRef<R::Offset>>,
 }
@@ -35,6 +44,8 @@ impl<R: gimli::Reader> LocFinder<R> {
             locations: HashMap::new(),
             lines: HashMap::new(),
             func_ranges: Ranges::new(),
+            unit_ranges: Ranges::new(),
+            main_unit: None,
             func_variables: HashMap::new(),
             global_variables: HashMap::new(),
         };
@@ -46,19 +57,23 @@ impl<R: gimli::Reader> LocFinder<R> {
             let unit_ref = unit.unit_ref(dwarf);
 
             // todo worker pool
-            loc_finder.find_functions(&unit_ref)?;
+            loc_finder.process_unit(&unit_ref)?;
             loc_finder.find_lines(&unit_ref)?;
         }
 
         Ok(loc_finder)
     }
 
-    fn find_functions(&mut self, unit_ref: &gimli::UnitRef<R>) -> Result<()> {
+    fn process_unit(&mut self, unit_ref: &gimli::UnitRef<R>) -> Result<()> {
         // todo iterate all entries
         let mut tree = unit_ref.entries_tree(None)?;
         let root = tree.root()?;
-        let mut children = root.children();
+        let root_entry = root.entry();
+        if root_entry.tag() == gimli::DW_TAG_compile_unit {
+            self.process_compile_unit(unit_ref, &root_entry)?;
+        }
 
+        let mut children = root.children();
         while let Some(child) = children.next()? {
             let entry = child.entry();
 
@@ -68,6 +83,26 @@ impl<R: gimli::Reader> LocFinder<R> {
                 _ => (),
             }
         }
+
+        Ok(())
+    }
+
+    fn process_compile_unit(&mut self, unit_ref: &gimli::UnitRef<R>, entry: &gimli::DebuggingInformationEntry<R>) -> Result<()> {
+        let name_attr = entry.attr_value(gimli::DW_AT_name)?.ok_or(anyhow!("get name attr value"))?;
+        let name: Rc<str> = Rc::from(unit_ref.attr_string(name_attr)?.to_string()?);
+
+        let low_pc_attr = entry.attr_value(gimli::DW_AT_low_pc)?.ok_or(anyhow!("get low_pc attr"))?;
+        let low_pc = unit_ref.attr_address(low_pc_attr)?.ok_or(anyhow!("get low_pc value"))?;
+
+        let high_pc_attr = entry.attr_value(gimli::DW_AT_high_pc)?.ok_or(anyhow!("get high_pc attr"))?;
+        let high_pc = match high_pc_attr {
+            gimli::AttributeValue::Udata(size) => low_pc + size,
+            high_pc => unit_ref.attr_address(high_pc)?.ok_or(anyhow!("get high_pc value"))?,
+        };
+
+        // high_pc is the address of the first location past the last instruction associated with the entity,
+        // so we do -1 because ranges are inclusive
+        self.unit_ranges.add(low_pc, high_pc - 1, name);
 
         Ok(())
     }
@@ -89,6 +124,12 @@ impl<R: gimli::Reader> LocFinder<R> {
         let low_pc = unit_ref.attr_address(low_pc_attr)?.ok_or(anyhow!("get low_pc value"))?;
 
         self.locations.insert(name.clone(), low_pc);
+
+        if name.as_ref() == MAIN_FUNC_NAME {
+            // compile unit must be processed by now
+            self.main_unit = Some(self.unit_ranges.find_value(low_pc).ok_or(anyhow!("can't get main unit"))?.clone());
+        }
+
         let high_pc_attr = match entry.attr_value(gimli::DW_AT_high_pc)? {
             Some(value) => value,
             None => return Ok(()),
@@ -161,8 +202,30 @@ impl<R: gimli::Reader> LocFinder<R> {
         Ok(Rc::from(fileline))
     }
 
-    pub fn find_loc(&self, loc: &str) -> Option<u64> {
-        self.locations.get(loc).copied()
+    pub fn find_loc<F>(&self, loc: &str, get_ip_fn: F) -> Result<Option<u64>>
+    where
+        F: Fn() -> Result<Option<u64>>,
+    {
+        let loc = loc.trim();
+
+        // if loc is a number, then we'll assume it's a line and therefore search by current unit plus loc
+        if loc.parse::<u64>().is_ok() {
+            // try to find current unit
+            let unit_name = match get_ip_fn()? {
+                Some(ip) => self.find_unit(ip),
+                None => self.main_unit.clone(),
+            };
+
+            return match unit_name {
+                Some(unit_name) => {
+                    let loc_with_unit = format!("{}:{}", unit_name, loc);
+                    Ok(self.locations.get(loc_with_unit.as_str()).copied())
+                }
+                None => Ok(None),
+            };
+        }
+
+        Ok(self.locations.get(loc).copied())
     }
 
     pub fn find_line(&self, address: u64) -> Option<Rc<str>> {
@@ -175,6 +238,10 @@ impl<R: gimli::Reader> LocFinder<R> {
 
     pub fn find_func_by_address(&self, address: u64) -> Option<Rc<str>> {
         self.func_ranges.find_value(address).cloned()
+    }
+
+    pub fn find_unit(&self, address: u64) -> Option<Rc<str>> {
+        self.unit_ranges.find_value(address).cloned()
     }
 
     pub fn get_vars(&self, func_name: Option<&str>) -> HashMap<Rc<str>, &EntryRef<R::Offset>> {
