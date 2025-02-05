@@ -41,18 +41,15 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
 
                 write!(f, "{}", name)?;
             }
-            VarType::Const(var_type) => {
+            VarType::Const(sub_type) => {
                 write!(f, "const ")?;
-                self.print_type(f, var_type, path)?;
+                self.print_type(f, sub_type, path)?;
             }
-            VarType::Pointer(var_type) => {
-                if !path.is_empty() {
-                    // todo follow fields behind pointer
-                    bail!(InvalidPathError);
+            VarType::Pointer(sub_type) => {
+                self.print_type(f, sub_type, path)?;
+                if path.is_empty() {
+                    write!(f, "*")?;
                 }
-
-                self.print_type(f, var_type, path)?;
-                write!(f, "*")?;
             }
             VarType::Struct { name, fields, .. } => {
                 if path.is_empty() {
@@ -64,11 +61,11 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                     }
                 }
             }
-            VarType::Typedef(name, var_type) => {
+            VarType::Typedef(name, sub_type) => {
                 if path.is_empty() {
                     write!(f, "{}", name)?;
                 } else {
-                    self.print_type(f, var_type, path)?;
+                    self.print_type(f, sub_type, path)?;
                 }
             }
         }
@@ -113,22 +110,22 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                         4 => write!(f, "{}", buf.get_f32_ne())?,
                         8 => write!(f, "{}", buf.get_f64_ne())?,
                         _ => bail!("unsupported byte size"),
-                    }
+                    },
                     _ => bail!("unsupported encoding"),
                 };
             }
-            VarType::Const(var_type) => self.print_bytes(f, buf, var_type, path)?,
-            VarType::Pointer(_) => {
-                if !path.is_empty() {
-                    // todo follow fields behind pointer
-                    bail!(InvalidPathError);
-                }
-
+            VarType::Const(sub_type) => self.print_bytes(f, buf, sub_type, path)?,
+            VarType::Pointer(sub_type) => {
                 let ptr = buf.get_u64_ne();
                 if ptr == 0 {
                     write!(f, "null")?;
                 } else {
-                    write!(f, "{:#x}", ptr)?;
+                    if path.is_empty() {
+                        write!(f, "&")?;
+                    }
+                    let size = sub_type.get_size();
+                    let buf = self.debugger.read_address(ptr, size)?;
+                    self.print_bytes(f, buf, sub_type, path)?;
                 }
             }
             VarType::Struct { fields, .. } => {
@@ -141,7 +138,7 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                     }
                 }
             }
-            VarType::Typedef(_, var_type) => self.print_bytes(f, buf, var_type, path)?,
+            VarType::Typedef(_, sub_type) => self.print_bytes(f, buf, sub_type, path)?,
         };
 
         Ok(())

@@ -665,10 +665,7 @@ impl<R: gimli::Reader> Debugger<R> {
                 buf.put_u64_ne(value);
             }
             gimli::Location::Address { address } => {
-                // todo maybe process_vm_readv
-                let mut procmem = fs::File::open(format!("/proc/{}/mem", self.child_pid()))?;
-                procmem.seek(io::SeekFrom::Start(*address))?;
-                procmem.read_exact(buf.as_mut_slice())?;
+                self.read_memory(*address, &mut buf)?;
             }
             gimli::Location::Value { value } => {
                 if size > WORD_SIZE {
@@ -682,5 +679,23 @@ impl<R: gimli::Reader> Debugger<R> {
         }
 
         Ok(buf.into())
+    }
+
+    pub fn read_address(&self, addr: u64, size: usize) -> Result<Bytes> {
+        log::trace!("read {} bytes from address {:#x}", size, addr);
+
+        let mut buf = vec![0; size];
+        self.read_memory(addr, &mut buf)?;
+
+        Ok(buf.into())
+    }
+
+    fn read_memory(&self, addr: u64, buf: &mut Vec<u8>) -> Result<()> {
+        // todo maybe process_vm_readv
+        let mut procmem = fs::File::open(format!("/proc/{}/mem", self.child_pid()))?;
+        procmem.seek(io::SeekFrom::Start(addr))?;
+        procmem.read_exact(buf.as_mut_slice())?;
+
+        Ok(())
     }
 }
