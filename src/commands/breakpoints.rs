@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use crate::debugger::Debugger;
+use crate::debugger::{BreakpointNotFound, Debugger};
 use crate::loc_finder::LocNotFound;
 use anyhow::Result;
 
@@ -11,7 +11,7 @@ where
 {
     if let Err(e) = debugger.add_breakpoint(loc) {
         match e.downcast_ref::<LocNotFound>() {
-            Some(_) => println!("loc not found"),
+            Some(_) => println!("{}", e),
             None => return Err(e),
         }
     }
@@ -20,7 +20,14 @@ where
 }
 
 pub fn remove<R: gimli::Reader>(debugger: &mut Debugger<R>, index: usize) -> Result<()> {
-    debugger.remove_breakpoint(index)
+    if let Err(e) = debugger.remove_breakpoint(index) {
+        match e.downcast_ref::<BreakpointNotFound>() {
+            Some(_) => println!("{}", e),
+            None => return Err(e),
+        }
+    }
+
+    Ok(())
 }
 
 pub fn list<R: gimli::Reader>(debugger: &Debugger<R>) -> Result<()> {

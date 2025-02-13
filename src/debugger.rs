@@ -16,6 +16,7 @@ use crate::var::{Type, TypeId, Var};
 
 use anyhow::{anyhow, bail, Result};
 use bytes::{BufMut, Bytes};
+use thiserror::Error;
 
 pub const WORD_SIZE: usize = 8;
 const READ_MEM_BUF_SIZE: usize = 512;
@@ -38,6 +39,10 @@ impl Breakpoint {
         }
     }
 }
+
+#[derive(Debug, Error)]
+#[error("breakpoint not found")]
+pub struct BreakpointNotFound;
 
 pub struct Debugger<R: gimli::Reader> {
     state: Cell<DebuggerState>,
@@ -340,6 +345,10 @@ impl<R: gimli::Reader> Debugger<R> {
     }
 
     pub fn remove_breakpoint(&mut self, index: usize) -> Result<()> {
+        if index >= self.breakpoints.len() {
+            bail!(BreakpointNotFound);
+        }
+
         let breakpoint = self.breakpoints.remove(index);
 
         self.disable_breakpoint(&breakpoint)?;
@@ -350,9 +359,11 @@ impl<R: gimli::Reader> Debugger<R> {
     pub fn clear_breakpoints(&mut self) -> Result<()> {
         log::trace!("clear breakpoints");
 
-        while !self.breakpoints.is_empty() {
-            self.remove_breakpoint(0)?;
+        for breakpoint in self.breakpoints.iter() {
+            self.disable_breakpoint(breakpoint)?;
         }
+
+        self.breakpoints.clear();
 
         Ok(())
     }
