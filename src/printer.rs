@@ -34,11 +34,16 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
 
     fn print_type(&self, f: &mut impl io::Write, type_id: TypeId, path: &[&str]) -> Result<()> {
         match self.debugger.get_type(type_id) {
+            Type::Void => {
+                if !path.is_empty() {
+                    bail!(InvalidPathError);
+                }
+                write!(f, "void")?;
+            }
             Type::Base { name, .. } => {
                 if !path.is_empty() {
                     bail!(InvalidPathError);
                 }
-
                 write!(f, "{}", name)?;
             }
             Type::Const(subtype_id) => {
@@ -82,11 +87,8 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
     fn print_bytes(&self, f: &mut impl io::Write, mut buf: Bytes, type_id: TypeId, path: &[&str]) -> Result<()> {
         let typ = self.debugger.get_type(type_id);
 
-        if self.is_c_string_type(typ) {
-            return self.print_c_string(f, buf, path);
-        }
-
         match typ {
+            Type::Void => bail!(InvalidPathError),
             Type::Base { encoding, size, .. } => {
                 if !path.is_empty() {
                     bail!(InvalidPathError);
@@ -119,19 +121,40 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
             Type::Const(subtype_id) => self.print_bytes(f, buf, *subtype_id, path)?,
             Type::Pointer(subtype_id) => {
                 let ptr = buf.get_u64_ne();
+                // is it null?
                 if ptr == 0 {
                     if !path.is_empty() {
                         bail!(InvalidPathError);
                     }
-                    write!(f, "null")?;
-                } else {
-                    if path.is_empty() {
-                        write!(f, "&")?;
-                    }
-                    let size = self.debugger.get_type_size(*subtype_id);
-                    let buf = self.debugger.read_address(ptr, size)?;
-                    self.print_bytes(f, buf, *subtype_id, path)?;
+                    return Ok(write!(f, "null")?);
                 }
+
+                // is it c-string?
+                let subtype = self.unwind_type(*subtype_id);
+                if let Type::Base { encoding, .. } = subtype {
+                    if *encoding == gimli::DW_ATE_signed_char {
+                        if !path.is_empty() {
+                            bail!(InvalidPathError);
+                        }
+                        return self.print_c_string(f, ptr, path);
+                    }
+                }
+
+                // is it void* ?
+                if let Type::Void = subtype {
+                    if !path.is_empty() {
+                        bail!(InvalidPathError);
+                    }
+                    write!(f, "{:#x}", ptr)?;
+                    return Ok(());
+                }
+
+                if path.is_empty() {
+                    write!(f, "&")?;
+                }
+                let size = self.debugger.get_type_size(*subtype_id);
+                let buf = self.debugger.read_address(ptr, size)?;
+                self.print_bytes(f, buf, *subtype_id, path)?;
             }
             Type::Struct { fields, .. } => {
                 if path.is_empty() {
@@ -179,26 +202,11 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
         typ
     }
 
-    fn is_c_string_type(&self, typ: &Type) -> bool {
-        if let Type::Pointer(subtype_id) = typ {
-            let subtype = self.unwind_type(*subtype_id);
-
-            if let Type::Base { encoding, .. } = subtype {
-                if *encoding == gimli::DW_ATE_signed_char {
-                    return true;
-                }
-            }
-        }
-
-        false
-    }
-
-    fn print_c_string(&self, f: &mut impl io::Write, mut buf: Bytes, path: &[&str]) -> Result<()> {
+    fn print_c_string(&self, f: &mut impl io::Write, ptr: u64, path: &[&str]) -> Result<()> {
         if !path.is_empty() {
             bail!(InvalidPathError);
         }
 
-        let ptr = buf.get_u64_ne();
         let s = self.debugger.read_c_string_at(ptr)?;
         write!(f, "{:?}", s)?;
 

@@ -4,6 +4,7 @@ pub type TypeId = usize;
 
 #[derive(Debug, Clone)]
 pub enum Type {
+    Void,
     Base { name: Rc<str>, encoding: gimli::DwAte, size: u16 },
     Const(TypeId),
     Pointer(TypeId),

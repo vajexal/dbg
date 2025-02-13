@@ -38,6 +38,8 @@ impl<Offset: gimli::ReaderOffset> VarRef<Offset> {
     }
 }
 
+const VOID_TYPE_ID: TypeId = 0;
+
 #[derive(Debug)]
 pub struct LocFinder<R: gimli::Reader> {
     // todo string table
@@ -63,7 +65,7 @@ impl<R: gimli::Reader> LocFinder<R> {
             main_unit: None,
             func_variables: HashMap::new(),
             global_variables: HashMap::new(),
-            types: Vec::new(),
+            types: vec![Type::Void],
         };
 
         let mut units = dwarf.units();
@@ -210,12 +212,15 @@ impl<R: gimli::Reader> LocFinder<R> {
         entry: &gimli::DebuggingInformationEntry<R>,
         visited_types: &mut HashMap<gimli::UnitOffset<R::Offset>, TypeId>,
     ) -> Result<TypeId> {
-        match entry.attr_value(gimli::DW_AT_type)?.ok_or(anyhow!("get type attr value"))? {
-            gimli::AttributeValue::UnitRef(offset) => {
-                let subtype_entry = unit_ref.entry(offset)?;
-                self.process_type(unit_ref, &subtype_entry, visited_types)
-            }
-            _ => bail!("unknown type"),
+        match entry.attr_value(gimli::DW_AT_type)? {
+            Some(value) => match value {
+                gimli::AttributeValue::UnitRef(offset) => {
+                    let subtype_entry = unit_ref.entry(offset)?;
+                    self.process_type(unit_ref, &subtype_entry, visited_types)
+                }
+                _ => bail!("unknown type"),
+            },
+            None => Ok(VOID_TYPE_ID),
         }
     }
 
@@ -231,7 +236,7 @@ impl<R: gimli::Reader> LocFinder<R> {
             Entry::Occupied(entry) => return Ok(*entry.get()),
             Entry::Vacant(entry) => {
                 entry.insert(type_id);
-                self.types.push(Type::Pointer(0)); // taking slot
+                self.types.push(Type::Void); // taking slot
             }
         };
 
