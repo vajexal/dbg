@@ -9,10 +9,10 @@ use std::path::Path;
 use std::process;
 use std::rc::Rc;
 
-use crate::loc_finder::{EntryRef, LocFinder, LocNotFound};
+use crate::loc_finder::{LocFinder, LocNotFound, VarRef};
 use crate::unwinder::Unwinder;
 use crate::utils::exit_status_sentinel::check;
-use crate::var::{Field, Var, VarType};
+use crate::var::{Type, TypeId, Var};
 
 use anyhow::{anyhow, bail, Result};
 use bytes::{BufMut, Bytes};
@@ -387,8 +387,8 @@ impl<R: gimli::Reader> Debugger<R> {
         let current_func = self.loc_finder.find_func_by_address(ip).ok_or(anyhow!("get current func"))?;
         let mut vars = Vec::new();
 
-        for (name, entry_ref) in self.loc_finder.get_vars(Some(current_func.as_ref())).iter() {
-            let var = self.get_var_by_entry_ref(name, current_func.as_ref(), entry_ref)?;
+        for (name, &var_ref) in self.loc_finder.get_vars(Some(current_func.as_ref())).iter() {
+            let var = self.get_var_by_entry_ref(name, current_func.as_ref(), var_ref)?;
             vars.push(var);
         }
 
@@ -397,24 +397,23 @@ impl<R: gimli::Reader> Debugger<R> {
 
     pub fn get_var(&self, name: &str) -> Result<Option<Var<R>>> {
         let ip = self.get_ip()?;
-        let entry_ref = match self.loc_finder.get_var(name, ip) {
-            Some(entry_ref) => entry_ref,
+        let current_func = self.loc_finder.find_func_by_address(ip).ok_or(anyhow!("get current func"))?;
+        let var_ref = match self.loc_finder.get_var(name, Some(current_func.as_ref())) {
+            Some(var_ref) => var_ref,
             None => return Ok(None),
         };
 
         let current_func = self.loc_finder.find_func_by_address(ip).ok_or(anyhow!("get current func"))?;
-        let var = self.get_var_by_entry_ref(name, current_func.as_ref(), entry_ref)?;
+        let var = self.get_var_by_entry_ref(name, current_func.as_ref(), var_ref)?;
 
         Ok(Some(var))
     }
 
-    fn get_var_by_entry_ref(&self, name: &str, func: &str, entry_ref: &EntryRef<R::Offset>) -> Result<Var<R>> {
-        let unit_header = self.dwarf.debug_info.header_from_offset(entry_ref.unit_offset)?;
+    fn get_var_by_entry_ref(&self, name: &str, func: &str, var_ref: VarRef<R::Offset>) -> Result<Var<R>> {
+        let unit_header = self.dwarf.debug_info.header_from_offset(var_ref.entry_ref.unit_offset)?;
         let unit = self.dwarf.unit(unit_header)?;
-        let entry = unit.entry(entry_ref.entry_offset)?;
+        let entry = unit.entry(var_ref.entry_ref.entry_offset)?;
         let unit_ref = unit.unit_ref(&self.dwarf);
-
-        let var_type = self.get_var_type(&unit_ref, &entry)?;
 
         let location = entry.attr_value(gimli::DW_AT_location)?.ok_or(anyhow!("get location attr"))?;
         let expr = location.exprloc_value().ok_or(anyhow!("get exprloc"))?;
@@ -425,10 +424,25 @@ impl<R: gimli::Reader> Debugger<R> {
         }
 
         Ok(Var {
+            type_id: var_ref.type_id,
             name: name.to_string(),
-            typ: var_type,
             location: pieces.remove(0).location,
         })
+    }
+
+    pub fn get_type(&self, type_id: TypeId) -> &Type {
+        self.loc_finder.get_type(type_id)
+    }
+
+    // todo decouple
+    pub fn get_type_size(&self, type_id: TypeId) -> usize {
+        match self.get_type(type_id) {
+            Type::Base { size, .. } => *size as usize,
+            Type::Const(subtype_id) => self.get_type_size(*subtype_id),
+            Type::Pointer(_) => WORD_SIZE,
+            Type::Struct { size, .. } => *size as usize,
+            Type::Typedef(_, subtype_id) => self.get_type_size(*subtype_id),
+        }
     }
 
     fn eval_expr(&self, expr: gimli::Expression<R>, unit_ref: &gimli::UnitRef<R>, current_func: &str) -> Result<gimli::Evaluation<R>> {
@@ -519,112 +533,6 @@ impl<R: gimli::Reader> Debugger<R> {
         };
 
         Ok(value)
-    }
-
-    fn get_var_type(&self, unit_ref: &gimli::UnitRef<R>, entry: &gimli::DebuggingInformationEntry<R>) -> Result<VarType> {
-        let type_value = entry.attr_value(gimli::DW_AT_type)?.ok_or(anyhow!("get type attr value"))?;
-
-        self.get_var_type_value(unit_ref, type_value)
-    }
-
-    fn get_var_type_value(&self, unit_ref: &gimli::UnitRef<R>, type_value: gimli::AttributeValue<R>) -> Result<VarType> {
-        match type_value {
-            gimli::AttributeValue::UnitRef(offset) => {
-                let entry = unit_ref.unit.entry(offset)?;
-
-                match entry.tag() {
-                    gimli::DW_TAG_base_type => {
-                        let name_attr = entry.attr_value(gimli::DW_AT_name)?.ok_or(anyhow!("get name attr value"))?;
-                        let name = unit_ref.attr_string(name_attr)?.to_string()?.to_string();
-                        let encoding_attr = entry.attr_value(gimli::DW_AT_encoding)?.ok_or(anyhow!("get encoding value"))?;
-                        let encoding = match encoding_attr {
-                            gimli::AttributeValue::Encoding(encoding) => encoding,
-                            _ => bail!("unexpected encoding attr value"),
-                        };
-                        let byte_size = entry
-                            .attr_value(gimli::DW_AT_byte_size)?
-                            .ok_or(anyhow!("get byte size value"))?
-                            .u16_value()
-                            .ok_or(anyhow!("convert byte size to u8"))?;
-
-                        Ok(VarType::Base {
-                            name,
-                            encoding,
-                            size: byte_size,
-                        })
-                    }
-                    gimli::DW_TAG_const_type => {
-                        let type_attr = entry.attr_value(gimli::DW_AT_type)?.ok_or(anyhow!("get type attr value"))?;
-                        let sub_type = self.get_var_type_value(unit_ref, type_attr)?;
-
-                        Ok(VarType::Const(Box::new(sub_type)))
-                    }
-                    gimli::DW_TAG_pointer_type => {
-                        let type_attr = entry.attr_value(gimli::DW_AT_type)?.ok_or(anyhow!("get type attr value"))?;
-                        let sub_type = self.get_var_type_value(unit_ref, type_attr)?;
-
-                        Ok(VarType::Pointer(Box::new(sub_type)))
-                    }
-                    gimli::DW_TAG_structure_type => {
-                        // struct could be anonymous
-                        let name = match entry.attr_value(gimli::DW_AT_name)? {
-                            Some(value) => unit_ref.attr_string(value)?.to_string()?.to_string(),
-                            None => String::new(),
-                        };
-
-                        let byte_size = entry
-                            .attr_value(gimli::DW_AT_byte_size)?
-                            .ok_or(anyhow!("get byte size value"))?
-                            .u16_value()
-                            .ok_or(anyhow!("convert byte size to u8"))?;
-
-                        let mut fields = Vec::new();
-
-                        let mut tree = unit_ref.entries_tree(Some(offset))?;
-                        let root = tree.root()?;
-                        let mut children = root.children();
-                        while let Some(child) = children.next()? {
-                            let child_entry = child.entry();
-                            if child_entry.tag() != gimli::DW_TAG_member {
-                                continue;
-                            }
-
-                            let member_name_attr = child_entry.attr_value(gimli::DW_AT_name)?.ok_or(anyhow!("get name attr value"))?;
-                            let member_name = unit_ref.attr_string(member_name_attr)?.to_string()?.to_string();
-
-                            // todo location
-                            let member_location = child_entry
-                                .attr_value(gimli::DW_AT_data_member_location)?
-                                .ok_or(anyhow!("get data member location attr value"))?
-                                .u16_value()
-                                .ok_or(anyhow!("convert data member location to u8"))?;
-
-                            let member_type_attr = child_entry.attr_value(gimli::DW_AT_type)?.ok_or(anyhow!("get type attr value"))?;
-                            let member_type = self.get_var_type_value(unit_ref, member_type_attr)?;
-
-                            fields.push(Field {
-                                name: member_name,
-                                typ: member_type,
-                                offset: member_location,
-                            });
-                        }
-
-                        Ok(VarType::Struct { name, size: byte_size, fields })
-                    }
-                    gimli::DW_TAG_typedef => {
-                        let name_attr = entry.attr_value(gimli::DW_AT_name)?.ok_or(anyhow!("get name attr value"))?;
-                        let name = unit_ref.attr_string(name_attr)?.to_string()?.to_string();
-
-                        let type_attr = entry.attr_value(gimli::DW_AT_type)?.ok_or(anyhow!("get type attr value"))?;
-                        let sub_type = self.get_var_type_value(unit_ref, type_attr)?;
-
-                        Ok(VarType::Typedef(name, Box::new(sub_type)))
-                    }
-                    _ => bail!("unexpected tag type"),
-                }
-            }
-            _ => bail!("unknown type"),
-        }
     }
 
     pub fn read_c_string_at(&self, addr: u64) -> Result<String> {

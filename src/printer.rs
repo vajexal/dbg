@@ -5,7 +5,7 @@ use bytes::{Buf, Bytes};
 use thiserror::Error;
 
 use crate::debugger::Debugger;
-use crate::var::{Field, Var, VarType};
+use crate::var::{Field, Type, TypeId, Var};
 
 #[derive(Error, Debug)]
 #[error("invalid path")]
@@ -23,7 +23,7 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
     pub fn print(&self, var: &Var<R>, path: &[&str]) -> Result<()> {
         let mut lock = io::stdout().lock();
 
-        self.print_type(&mut lock, &var.typ, path)?;
+        self.print_type(&mut lock, var.type_id, path)?;
         let name = path.last().copied().unwrap_or(var.name.as_str());
         write!(lock, " {} = ", name)?;
         self.print_value(&mut lock, var, path)?;
@@ -32,40 +32,40 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
         Ok(())
     }
 
-    fn print_type(&self, f: &mut impl io::Write, var_type: &VarType, path: &[&str]) -> Result<()> {
-        match var_type {
-            VarType::Base { name, .. } => {
+    fn print_type(&self, f: &mut impl io::Write, type_id: TypeId, path: &[&str]) -> Result<()> {
+        match self.debugger.get_type(type_id) {
+            Type::Base { name, .. } => {
                 if !path.is_empty() {
                     bail!(InvalidPathError);
                 }
 
                 write!(f, "{}", name)?;
             }
-            VarType::Const(sub_type) => {
+            Type::Const(subtype_id) => {
                 write!(f, "const ")?;
-                self.print_type(f, sub_type, path)?;
+                self.print_type(f, *subtype_id, path)?;
             }
-            VarType::Pointer(sub_type) => {
-                self.print_type(f, sub_type, path)?;
+            Type::Pointer(subtype_id) => {
+                self.print_type(f, *subtype_id, path)?;
                 if path.is_empty() {
                     write!(f, "*")?;
                 }
             }
-            VarType::Struct { name, fields, .. } => {
+            Type::Struct { name, fields, .. } => {
                 if path.is_empty() {
                     write!(f, "{}", name)?;
                 } else {
-                    match fields.iter().find(|field| field.name == path[0]) {
-                        Some(field) => self.print_type(f, &field.typ, &path[1..])?,
+                    match fields.iter().find(|field| field.name.as_ref() == path[0]) {
+                        Some(field) => self.print_type(f, field.type_id, &path[1..])?,
                         None => bail!(InvalidPathError),
                     }
                 }
             }
-            VarType::Typedef(name, sub_type) => {
+            Type::Typedef(name, subtype_id) => {
                 if path.is_empty() {
                     write!(f, "{}", name)?;
                 } else {
-                    self.print_type(f, sub_type, path)?;
+                    self.print_type(f, *subtype_id, path)?;
                 }
             }
         }
@@ -74,18 +74,20 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
     }
 
     fn print_value(&self, f: &mut impl io::Write, var: &Var<R>, path: &[&str]) -> Result<()> {
-        let size = var.typ.get_size();
+        let size = self.debugger.get_type_size(var.type_id);
         let buf = self.debugger.read_location(&var.location, size)?;
-        self.print_bytes(f, buf, &var.typ, path)
+        self.print_bytes(f, buf, var.type_id, path)
     }
 
-    fn print_bytes(&self, f: &mut impl io::Write, mut buf: Bytes, var_type: &VarType, path: &[&str]) -> Result<()> {
-        if Self::is_c_string_type(var_type) {
+    fn print_bytes(&self, f: &mut impl io::Write, mut buf: Bytes, type_id: TypeId, path: &[&str]) -> Result<()> {
+        let typ = self.debugger.get_type(type_id);
+
+        if self.is_c_string_type(typ) {
             return self.print_c_string(f, buf, path);
         }
 
-        match var_type {
-            VarType::Base { encoding, size, .. } => {
+        match typ {
+            Type::Base { encoding, size, .. } => {
                 if !path.is_empty() {
                     bail!(InvalidPathError);
                 }
@@ -114,31 +116,34 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                     _ => bail!("unsupported encoding"),
                 };
             }
-            VarType::Const(sub_type) => self.print_bytes(f, buf, sub_type, path)?,
-            VarType::Pointer(sub_type) => {
+            Type::Const(subtype_id) => self.print_bytes(f, buf, *subtype_id, path)?,
+            Type::Pointer(subtype_id) => {
                 let ptr = buf.get_u64_ne();
                 if ptr == 0 {
+                    if !path.is_empty() {
+                        bail!(InvalidPathError);
+                    }
                     write!(f, "null")?;
                 } else {
                     if path.is_empty() {
                         write!(f, "&")?;
                     }
-                    let size = sub_type.get_size();
+                    let size = self.debugger.get_type_size(*subtype_id);
                     let buf = self.debugger.read_address(ptr, size)?;
-                    self.print_bytes(f, buf, sub_type, path)?;
+                    self.print_bytes(f, buf, *subtype_id, path)?;
                 }
             }
-            VarType::Struct { fields, .. } => {
+            Type::Struct { fields, .. } => {
                 if path.is_empty() {
                     self.print_struct_bytes(f, buf, fields)?;
                 } else {
-                    match fields.iter().find(|field| field.name == path[0]) {
-                        Some(field) => self.print_bytes(f, buf.slice((field.offset as usize)..), &field.typ, &path[1..])?,
+                    match fields.iter().find(|field| field.name.as_ref() == path[0]) {
+                        Some(field) => self.print_bytes(f, buf.slice((field.offset as usize)..), field.type_id, &path[1..])?,
                         None => bail!(InvalidPathError),
                     }
                 }
             }
-            VarType::Typedef(_, sub_type) => self.print_bytes(f, buf, sub_type, path)?,
+            Type::Typedef(_, subtype_id) => self.print_bytes(f, buf, *subtype_id, path)?,
         };
 
         Ok(())
@@ -153,7 +158,7 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
             }
             write!(f, "{} = ", field.name)?;
 
-            self.print_bytes(f, buf.slice((field.offset as usize)..), &field.typ, &[])?;
+            self.print_bytes(f, buf.slice((field.offset as usize)..), field.type_id, &[])?;
         }
 
         write!(f, " }}")?;
@@ -161,9 +166,24 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
         Ok(())
     }
 
-    fn is_c_string_type(var_type: &VarType) -> bool {
-        if let VarType::Pointer(sub_type) = var_type {
-            if let VarType::Base { encoding, .. } = sub_type.unwind_const() {
+    fn unwind_type(&self, type_id: TypeId) -> &Type {
+        let mut typ = self.debugger.get_type(type_id);
+        loop {
+            typ = match typ {
+                Type::Const(subtype_id) => self.debugger.get_type(*subtype_id),
+                Type::Typedef(_, subtype_id) => self.debugger.get_type(*subtype_id),
+                _ => break,
+            }
+        }
+
+        typ
+    }
+
+    fn is_c_string_type(&self, typ: &Type) -> bool {
+        if let Type::Pointer(subtype_id) = typ {
+            let subtype = self.unwind_type(*subtype_id);
+
+            if let Type::Base { encoding, .. } = subtype {
                 if *encoding == gimli::DW_ATE_signed_char {
                     return true;
                 }

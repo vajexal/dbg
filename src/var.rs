@@ -1,43 +1,26 @@
-use crate::debugger::WORD_SIZE;
+use std::rc::Rc;
 
-#[derive(Debug)]
-pub enum VarType {
-    Base { name: String, encoding: gimli::DwAte, size: u16 },
-    Const(Box<VarType>),
-    Pointer(Box<VarType>),
-    Struct { name: String, size: u16, fields: Vec<Field> },
-    Typedef(String, Box<VarType>),
+pub type TypeId = usize;
+
+#[derive(Debug, Clone)]
+pub enum Type {
+    Base { name: Rc<str>, encoding: gimli::DwAte, size: u16 },
+    Const(TypeId),
+    Pointer(TypeId),
+    Struct { name: Rc<str>, size: u16, fields: Vec<Field> },
+    Typedef(Rc<str>, TypeId),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Field {
-    pub name: String,
-    pub typ: VarType,
+    pub name: Rc<str>,
+    pub type_id: TypeId,
     pub offset: u16,
-}
-
-impl VarType {
-    pub fn unwind_const(&self) -> &Self {
-        match self {
-            VarType::Const(var_type) => var_type.unwind_const(),
-            typ => typ,
-        }
-    }
-
-    pub fn get_size(&self) -> usize {
-        match self {
-            VarType::Base { size, .. } => *size as usize,
-            VarType::Const(var_type) => var_type.get_size(),
-            VarType::Pointer(_) => WORD_SIZE,
-            VarType::Struct { size, .. } => *size as usize,
-            VarType::Typedef(_, var_type) => var_type.get_size(),
-        }
-    }
 }
 
 #[derive(Debug)]
 pub struct Var<R: gimli::Reader> {
-    pub typ: VarType,
+    pub type_id: TypeId,
     pub name: String,
     pub location: gimli::Location<R>,
 }
