@@ -364,29 +364,7 @@ impl<R: gimli::Reader> LocFinder<R> {
         Ok(Rc::from(fileline))
     }
 
-    pub fn find_loc<F>(&self, loc: &str, get_ip_fn: F) -> Result<Option<u64>>
-    where
-        F: Fn() -> Result<Option<u64>>,
-    {
-        let loc = loc.trim();
-
-        // if loc is a number, then we'll assume it's a line and therefore search by current unit plus loc
-        if loc.parse::<u64>().is_ok() {
-            // try to find current unit
-            let unit_name = match get_ip_fn()? {
-                Some(ip) => self.find_unit(ip),
-                None => self.main_unit.clone(),
-            };
-
-            return match unit_name {
-                Some(unit_name) => {
-                    let loc_with_unit = format!("{}:{}", unit_name, loc);
-                    Ok(self.locations.get(loc_with_unit.as_str()).copied())
-                }
-                None => Ok(None),
-            };
-        }
-
+    pub fn find_loc(&self, loc: &str) -> Result<Option<u64>> {
         Ok(self.locations.get(loc).copied())
     }
 
@@ -402,8 +380,11 @@ impl<R: gimli::Reader> LocFinder<R> {
         self.func_ranges.find_value(address).cloned()
     }
 
-    pub fn find_unit(&self, address: u64) -> Option<Rc<str>> {
-        self.unit_ranges.find_value(address).cloned()
+    pub fn find_unit(&self, address: Option<u64>) -> Option<Rc<str>> {
+        match address {
+            Some(address) => self.unit_ranges.find_value(address).cloned(),
+            None => self.main_unit.clone(),
+        }
     }
 
     pub fn get_vars(&self, func_name: Option<&str>) -> HashMap<Rc<str>, VarRef<R::Offset>> {

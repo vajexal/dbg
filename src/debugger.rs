@@ -314,14 +314,8 @@ impl<R: gimli::Reader> Debugger<R> {
         S: Into<Cow<'a, str>>,
     {
         let loc = loc.into().into_owned();
-        let addr = self
-            .loc_finder
-            .find_loc(&loc, || match self.get_state() {
-                DebuggerState::Started => Ok(None),
-                DebuggerState::Running => Ok(Some(self.get_ip()?)),
-                DebuggerState::Exited => panic!("can't get ip"),
-            })?
-            .ok_or(LocNotFound)?;
+        let loc = self.prepare_breakpoint_loc(&loc)?;
+        let addr = self.loc_finder.find_loc(&loc)?.ok_or(LocNotFound)?;
 
         log::trace!("set breakpoint at {:#x}", addr);
 
@@ -366,6 +360,28 @@ impl<R: gimli::Reader> Debugger<R> {
         self.breakpoints.clear();
 
         Ok(())
+    }
+
+    fn prepare_breakpoint_loc<'a>(&self, loc: &'a str) -> Result<Cow<'a, str>> {
+        let loc = loc.trim();
+
+        match loc.parse::<u64>() {
+            Ok(_) => {
+                let ip = match self.get_state() {
+                    DebuggerState::Started => None,
+                    DebuggerState::Running => Some(self.get_ip()?),
+                    DebuggerState::Exited => panic!("can't get ip"),
+                };
+
+                let unit_name = self.loc_finder.find_unit(ip);
+
+                match unit_name {
+                    Some(unit_name) => Ok(Cow::from(format!("{}:{}", unit_name, loc))),
+                    None => Err(anyhow!(LocNotFound)),
+                }
+            }
+            Err(_) => Ok(Cow::from(loc)),
+        }
     }
 
     pub fn enable_breakpoint(&self, breakpoint: &Breakpoint) -> Result<()> {
