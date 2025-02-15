@@ -387,6 +387,17 @@ impl<R: gimli::Reader> LocFinder<R> {
         }
     }
 
+    pub fn find_func_start(&self, address: u64) -> Option<u64> {
+        self.func_ranges.find_range(address).map(|(start, _)| start)
+    }
+
+    pub fn is_inside_main(&self, address: u64) -> bool {
+        match self.find_func_by_address(address) {
+            Some(func) => func.as_ref() == MAIN_FUNC_NAME,
+            None => false,
+        }
+    }
+
     pub fn get_vars(&self, func_name: Option<&str>) -> HashMap<Rc<str>, VarRef<R::Offset>> {
         let mut vars = HashMap::new();
 

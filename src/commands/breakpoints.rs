@@ -38,7 +38,7 @@ pub fn list<R: gimli::Reader>(debugger: &Debugger<R>) -> Result<()> {
         return Ok(());
     }
 
-    for breakpoint in debugger.list_breakpoints().iter() {
+    for breakpoint in breakpoints.iter() {
         println!("{}", breakpoint.loc);
     }
 

@@ -1,4 +1,4 @@
-use crate::debugger::{Debugger, DebuggerState};
+use crate::debugger::Debugger;
 use anyhow::Result;
 
 pub fn run<R: gimli::Reader>(debugger: &Debugger<R>) -> Result<()> {
@@ -12,9 +12,6 @@ pub fn stop<R: gimli::Reader>(debugger: &mut Debugger<R>) -> Result<()> {
 
 pub fn cont<R: gimli::Reader>(debugger: &mut Debugger<R>) -> Result<()> {
     debugger.cont()?;
-    if debugger.get_state() == DebuggerState::Exited {
-        return Ok(());
-    }
     debugger.wait()
 }
 

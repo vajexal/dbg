@@ -1,5 +1,6 @@
 use std::borrow::Cow;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, Read, Seek};
@@ -15,11 +16,12 @@ use crate::utils::exit_status_sentinel::check;
 use crate::var::{Type, TypeId, Var};
 
 use anyhow::{anyhow, bail, Result};
-use bytes::{BufMut, Bytes};
+use bytes::{Buf, BufMut, Bytes};
 use thiserror::Error;
 
 pub const WORD_SIZE: usize = 8;
 const READ_MEM_BUF_SIZE: usize = 512;
+const FUNC_PROLOGUE_MAGIC_BYTES: [u8; 8] = [0xf3, 0x0f, 0x1e, 0xfa, 0x55, 0x48, 0x89, 0xe5];
 
 #[derive(Debug, Clone)]
 pub struct Breakpoint {
@@ -44,6 +46,17 @@ impl Breakpoint {
 #[error("breakpoint not found")]
 pub struct BreakpointNotFound;
 
+#[derive(Debug)]
+struct Trap {
+    original_data: u64,
+}
+
+impl Trap {
+    fn new(original_data: u64) -> Self {
+        Self { original_data }
+    }
+}
+
 pub struct Debugger<R: gimli::Reader> {
     state: Cell<DebuggerState>,
     dwarf: gimli::Dwarf<R>,
@@ -51,6 +64,7 @@ pub struct Debugger<R: gimli::Reader> {
     loc_finder: LocFinder<R>,
     child: process::Child,
     breakpoints: Vec<Breakpoint>,
+    traps: RefCell<HashMap<u64, Trap>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -82,16 +96,17 @@ impl<R: gimli::Reader> Debugger<R> {
         let child = command.args(args).spawn()?;
 
         let debugger = Self {
-            state: Cell::new(DebuggerState::Exited),
+            state: Cell::new(DebuggerState::Started),
             dwarf,
             unwinder,
             loc_finder,
             child,
             breakpoints: Vec::new(),
+            traps: RefCell::new(HashMap::new()),
         };
 
         let _ = debugger.wait()?;
-
+        // wait will set state to running, so change it back
         debugger.state.set(DebuggerState::Started);
 
         Ok(debugger)
@@ -122,6 +137,10 @@ impl<R: gimli::Reader> Debugger<R> {
     }
 
     pub fn wait(&self) -> Result<()> {
+        if self.get_state() == DebuggerState::Exited {
+            return Ok(());
+        }
+
         log::trace!("wait for signal");
 
         let mut status: libc::c_int = 0;
@@ -134,31 +153,40 @@ impl<R: gimli::Reader> Debugger<R> {
             return Ok(());
         }
 
-        log::trace!("stopped at {:#x}", self.get_ip()?);
         self.state.set(DebuggerState::Running);
+        let ip = self.get_ip()?;
+        log::trace!("stopped at {:#x}", ip);
+
+        if self.traps.borrow().contains_key(&ip) {
+            self.remove_trap(ip)?;
+            self.rewind()?;
+            return Ok(());
+        }
+
+        if let Some(breakpoint) = self.breakpoints.iter().find(|&breakpoint| breakpoint.addr == ip - 1) {
+            log::trace!("stopped at breakpoint {}", breakpoint.loc);
+            self.disable_breakpoint(breakpoint)?;
+            self.rewind()?;
+            return Ok(());
+        }
+
         Ok(())
     }
 
-    pub fn cont(&mut self) -> Result<()> {
+    pub fn cont(&self) -> Result<()> {
         log::trace!("continue");
 
         // find breakpoint
         let ip = self.get_ip()?;
-
         log::trace!("now at {:#x}", ip);
 
-        let breakpoint = self.breakpoints.iter().find(|breakpoint| breakpoint.addr == ip - 1);
-        if let Some(breakpoint) = breakpoint {
+        if let Some(breakpoint) = self.breakpoints.iter().find(|&breakpoint| breakpoint.addr == ip) {
             log::trace!("stopped at breakpoint {}", breakpoint.loc);
 
-            self.disable_breakpoint(breakpoint)?;
-            self.rewind()?;
             self.single_step()?;
-
             if self.get_state() == DebuggerState::Exited {
                 return Ok(());
             }
-
             self.enable_breakpoint(breakpoint)?;
         }
 
@@ -231,23 +259,21 @@ impl<R: gimli::Reader> Debugger<R> {
     }
 
     pub fn step_out(&self) -> Result<()> {
-        let start_bp = self.get_bp()?;
-        log::trace!("step out start bp {:#x}", start_bp);
-
-        loop {
-            self.single_step()?;
-            match self.get_state() {
-                DebuggerState::Started => panic!("child is not running"),
-                DebuggerState::Running => {
-                    let bp = self.get_bp()?;
-                    if bp > start_bp {
-                        log::trace!("step out stop bp {:#x}", bp);
-                        return Ok(());
-                    }
-                }
-                DebuggerState::Exited => return Ok(()),
-            }
+        let ip = self.get_ip()?;
+        if self.loc_finder.is_inside_main(ip) {
+            log::trace!("step out of main");
+            self.cont()?;
+            self.wait()?;
+            return Ok(());
         }
+
+        let return_ip = self.get_func_return_addr()?;
+        log::trace!("step out to {:#x}", return_ip);
+
+        // there is posibility that we'll stop with bp <= start_bp (using some recursion), but we'll ignore this case for now
+        self.add_trap(return_ip)?;
+        self.cont()?;
+        self.wait()
     }
 
     fn rewind(&self) -> Result<()> {
@@ -282,6 +308,34 @@ impl<R: gimli::Reader> Debugger<R> {
         Ok(())
     }
 
+    fn get_func_return_addr(&self) -> Result<u64> {
+        // todo get all registers in one syscall
+        let ip = self.get_ip()?;
+        let func_start = self.loc_finder.find_func_start(ip).ok_or(anyhow!("find func start"))?;
+
+        self.check_func_prologue(func_start)?;
+
+        let return_addr_location = if ip - func_start <= 4 {
+            self.get_sp()?
+        } else if ip - func_start <= 8 {
+            self.get_sp()? + WORD_SIZE as u64
+        } else {
+            self.get_bp()? + WORD_SIZE as u64
+        };
+
+        let return_addr = self.read_address(return_addr_location, WORD_SIZE)?.get_u64_ne();
+        Ok(return_addr)
+    }
+
+    fn check_func_prologue(&self, func_start: u64) -> Result<()> {
+        let bytes = self.read_address(func_start, FUNC_PROLOGUE_MAGIC_BYTES.len())?;
+        if bytes.as_ref() != FUNC_PROLOGUE_MAGIC_BYTES {
+            bail!("func prologue not found");
+        }
+
+        Ok(())
+    }
+
     /// get instruction pointer
     fn get_ip(&self) -> Result<u64> {
         let mut regs: libc::user_regs_struct = unsafe { mem::zeroed() };
@@ -298,15 +352,20 @@ impl<R: gimli::Reader> Debugger<R> {
         Ok(regs.rip)
     }
 
+    /// get stack base pointer
+    fn get_bp(&self) -> Result<u64> {
+        self.get_register_value(gimli::X86_64::RBP)
+    }
+
+    /// get stack pointer
+    fn get_sp(&self) -> Result<u64> {
+        self.get_register_value(gimli::X86_64::RSP)
+    }
+
     fn get_current_line(&self) -> Result<Option<Rc<str>>> {
         let ip = self.get_ip()?;
         let line = self.loc_finder.find_line(ip);
         Ok(line)
-    }
-
-    /// get stack base pointer
-    fn get_bp(&self) -> Result<u64> {
-        self.get_register_value(gimli::X86_64::RBP)
     }
 
     pub fn add_breakpoint<'a, S>(&mut self, loc: S) -> Result<()>
@@ -405,6 +464,37 @@ impl<R: gimli::Reader> Debugger<R> {
         log::trace!("restored data at {:#x} to {:#x}", breakpoint.addr, breakpoint.original_data);
 
         breakpoint.enabled.set(false);
+
+        Ok(())
+    }
+
+    fn add_trap(&self, addr: u64) -> Result<()> {
+        // check if trap is already set
+        if self.traps.borrow().contains_key(&addr) {
+            return Ok(());
+        }
+
+        log::trace!("set trap at {:#x}", addr);
+
+        let original_data = check(unsafe { libc::ptrace(libc::PTRACE_PEEKTEXT, self.child_pid(), addr, std::ptr::null_mut::<i8>()) })?;
+        let data_with_trap = (original_data & !0xff) | 0xcc;
+
+        log::trace!("replace {:#x} with {:#x}", addr, data_with_trap);
+        check(unsafe { libc::ptrace(libc::PTRACE_POKETEXT, self.child_pid(), addr, data_with_trap) })?;
+
+        let readback_data = check(unsafe { libc::ptrace(libc::PTRACE_PEEKTEXT, self.child_pid(), addr, std::ptr::null_mut::<i8>()) })?;
+        log::trace!("data after trap {:#x}: {:#x}", addr, readback_data);
+
+        self.traps.borrow_mut().insert(addr, Trap::new(original_data as u64));
+
+        Ok(())
+    }
+
+    fn remove_trap(&self, addr: u64) -> Result<()> {
+        if let Some(trap) = self.traps.borrow_mut().remove(&addr) {
+            check(unsafe { libc::ptrace(libc::PTRACE_POKETEXT, self.child_pid(), addr, trap.original_data) })?;
+            log::trace!("restored data at {:#x} to {:#x}", addr, trap.original_data);
+        }
 
         Ok(())
     }
