@@ -43,8 +43,9 @@ const VOID_TYPE_ID: TypeId = 0;
 #[derive(Debug)]
 pub struct LocFinder<R: gimli::Reader> {
     // todo string table
-    locations: HashMap<Rc<str>, u64>, // location -> address
-    lines: HashMap<u64, Rc<str>>,     // address -> line number
+    locations: HashMap<Rc<str>, u64>,  // location -> address
+    addr2line: HashMap<u64, Rc<str>>,  // address -> line
+    lines: HashMap<Rc<str>, Vec<u64>>, // filepath -> { line: address }
     funcs: HashMap<Rc<str>, EntryRef<R::Offset>>,
     func_ranges: Ranges<Rc<str>>,
     unit_ranges: Ranges<Rc<str>>,
@@ -59,6 +60,7 @@ impl<R: gimli::Reader> LocFinder<R> {
         let mut loc_finder = Self {
             funcs: HashMap::new(),
             locations: HashMap::new(),
+            addr2line: HashMap::new(),
             lines: HashMap::new(),
             func_ranges: Ranges::new(),
             unit_ranges: Ranges::new(),
@@ -343,25 +345,33 @@ impl<R: gimli::Reader> LocFinder<R> {
         let mut rows = program.rows();
 
         while let Some((header, row)) = rows.next_row()? {
-            let fileline = Self::get_fileline(unit_ref, row, &header)?;
+            let filepath: Rc<str> = match row.file(&header) {
+                Some(file) => Rc::from(unit_ref.attr_string(file.path_name())?.to_string()?),
+                None => bail!("get path name"),
+            };
+
+            let line = row.line().ok_or(anyhow!("get line number"))?.get() as usize;
+            let fileline: Rc<str> = Rc::from(format!("{}:{}", filepath, line));
 
             self.locations.insert(fileline.clone(), row.address());
-            self.lines.insert(row.address(), fileline);
+            self.addr2line.insert(row.address(), fileline);
+
+            if row.end_sequence() {
+                continue;
+            }
+
+            let lines = self.lines.entry(filepath).or_default();
+            // skip empty lines
+            while lines.len() < line {
+                lines.push(0);
+            }
+            // save only first line appearance
+            if lines.len() == line {
+                lines.push(row.address());
+            }
         }
 
         Ok(())
-    }
-
-    fn get_fileline(unit_ref: &gimli::UnitRef<R>, row: &gimli::LineRow, header: &gimli::LineProgramHeader<R>) -> Result<Rc<str>> {
-        let path_name = match row.file(&header) {
-            Some(file) => unit_ref.attr_string(file.path_name())?,
-            None => bail!("get path name"),
-        };
-
-        let line = row.line().ok_or(anyhow!("get line number"))?;
-        let fileline = format!("{}:{}", path_name.to_string()?, line);
-
-        Ok(Rc::from(fileline))
     }
 
     pub fn find_loc(&self, loc: &str) -> Result<Option<u64>> {
@@ -369,7 +379,28 @@ impl<R: gimli::Reader> LocFinder<R> {
     }
 
     pub fn find_line(&self, address: u64) -> Option<Rc<str>> {
-        self.lines.get(&address).cloned()
+        self.addr2line.get(&address).cloned()
+    }
+
+    pub fn find_next_line_address(&self, fileline: &str) -> Option<u64> {
+        let (filepath, line) = match Self::parse_fileline(fileline) {
+            Some((filepath, line)) => (filepath, line as usize),
+            None => return None,
+        };
+
+        let lines = match self.lines.get(filepath) {
+            Some(lines) => lines,
+            None => return None,
+        };
+
+        for line in (line + 1)..lines.len() {
+            let address = lines[line];
+            if address != 0 {
+                return Some(address);
+            }
+        }
+
+        None
     }
 
     pub fn find_func(&self, func_name: &str) -> Option<EntryRef<R::Offset>> {
@@ -391,11 +422,21 @@ impl<R: gimli::Reader> LocFinder<R> {
         self.func_ranges.find_range(address).map(|(start, _)| start)
     }
 
+    pub fn find_fund_end(&self, address: u64) -> Option<u64> {
+        self.func_ranges.find_range(address).map(|(_, end)| end)
+    }
+
     pub fn is_inside_main(&self, address: u64) -> bool {
         match self.find_func_by_address(address) {
             Some(func) => func.as_ref() == MAIN_FUNC_NAME,
             None => false,
         }
+    }
+
+    fn parse_fileline(fileline: &str) -> Option<(&str, u64)> {
+        fileline
+            .rsplit_once(':')
+            .and_then(|(filepath, line)| line.parse::<u64>().map(|line| (filepath, line)).ok())
     }
 
     pub fn get_vars(&self, func_name: Option<&str>) -> HashMap<Rc<str>, VarRef<R::Offset>> {

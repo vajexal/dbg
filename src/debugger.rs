@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs;
@@ -156,14 +157,16 @@ impl<R: gimli::Reader> Debugger<R> {
         self.state.set(DebuggerState::Running);
         let ip = self.get_ip()?;
         log::trace!("stopped at {:#x}", ip);
+        let prev_addr = ip - 1;
 
-        if self.traps.borrow().contains_key(&ip) {
-            self.remove_trap(ip)?;
+        if self.traps.borrow().contains_key(&prev_addr) {
+            log::trace!("stopped at trap {:#x}", prev_addr);
+            self.remove_trap(prev_addr)?;
             self.rewind()?;
             return Ok(());
         }
 
-        if let Some(breakpoint) = self.breakpoints.iter().find(|&breakpoint| breakpoint.addr == ip - 1) {
+        if let Some(breakpoint) = self.breakpoints.iter().find(|&breakpoint| breakpoint.addr == prev_addr) {
             log::trace!("stopped at breakpoint {}", breakpoint.loc);
             self.disable_breakpoint(breakpoint)?;
             self.rewind()?;
@@ -210,31 +213,24 @@ impl<R: gimli::Reader> Debugger<R> {
     }
 
     pub fn step(&self) -> Result<()> {
-        let start_bp = self.get_bp()?;
-        let start_line = self.get_current_line()?.ok_or(anyhow!("can't find start line"))?;
-        log::trace!("step from {}", start_line);
+        let ip = self.get_ip()?;
+        let start_line = self.loc_finder.find_line(ip).ok_or(anyhow!("can't find start line"))?;
+        log::trace!("start line {}", start_line);
+        let next_line_address = match self.loc_finder.find_next_line_address(&start_line) {
+            Some(address) => address,
+            None => return self.step_out(),
+        };
+        log::trace!("next line address {:#x}", next_line_address);
+        let func_end = self.loc_finder.find_fund_end(ip).ok_or(anyhow!("can't find func end"))?;
 
-        loop {
-            self.single_step()?;
-            match self.get_state() {
-                DebuggerState::Started => panic!("child is not running"),
-                DebuggerState::Running => {
-                    let bp = self.get_bp()?;
-                    if bp < start_bp {
-                        // stepped inside function
-                        continue;
-                    }
-
-                    if let Some(line) = self.get_current_line()? {
-                        if line != start_line {
-                            log::trace!("stepped to {}", line);
-                            return Ok(());
-                        }
-                    }
-                }
-                DebuggerState::Exited => return Ok(()),
-            }
+        if next_line_address >= func_end {
+            log::trace!("next line is outside of func. Step out");
+            return self.step_out();
         }
+
+        self.add_trap(next_line_address)?;
+        self.cont()?;
+        self.wait()
     }
 
     pub fn step_in(&self) -> Result<()> {
@@ -469,25 +465,25 @@ impl<R: gimli::Reader> Debugger<R> {
     }
 
     fn add_trap(&self, addr: u64) -> Result<()> {
-        // check if trap is already set
-        if self.traps.borrow().contains_key(&addr) {
-            return Ok(());
+        match self.traps.borrow_mut().entry(addr) {
+            Entry::Occupied(occupied_entry) => Ok(()),
+            Entry::Vacant(vacant_entry) => {
+                log::trace!("set trap at {:#x}", addr);
+
+                let original_data = check(unsafe { libc::ptrace(libc::PTRACE_PEEKTEXT, self.child_pid(), addr, std::ptr::null_mut::<i8>()) })?;
+                let data_with_trap = (original_data & !0xff) | 0xcc;
+
+                log::trace!("replace {:#x} with {:#x}", addr, data_with_trap);
+                check(unsafe { libc::ptrace(libc::PTRACE_POKETEXT, self.child_pid(), addr, data_with_trap) })?;
+
+                let readback_data = check(unsafe { libc::ptrace(libc::PTRACE_PEEKTEXT, self.child_pid(), addr, std::ptr::null_mut::<i8>()) })?;
+                log::trace!("data after trap {:#x}: {:#x}", addr, readback_data);
+
+                vacant_entry.insert(Trap::new(original_data as u64));
+
+                Ok(())
+            }
         }
-
-        log::trace!("set trap at {:#x}", addr);
-
-        let original_data = check(unsafe { libc::ptrace(libc::PTRACE_PEEKTEXT, self.child_pid(), addr, std::ptr::null_mut::<i8>()) })?;
-        let data_with_trap = (original_data & !0xff) | 0xcc;
-
-        log::trace!("replace {:#x} with {:#x}", addr, data_with_trap);
-        check(unsafe { libc::ptrace(libc::PTRACE_POKETEXT, self.child_pid(), addr, data_with_trap) })?;
-
-        let readback_data = check(unsafe { libc::ptrace(libc::PTRACE_PEEKTEXT, self.child_pid(), addr, std::ptr::null_mut::<i8>()) })?;
-        log::trace!("data after trap {:#x}: {:#x}", addr, readback_data);
-
-        self.traps.borrow_mut().insert(addr, Trap::new(original_data as u64));
-
-        Ok(())
     }
 
     fn remove_trap(&self, addr: u64) -> Result<()> {
