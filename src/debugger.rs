@@ -11,14 +11,14 @@ use std::path::Path;
 use std::process;
 use std::rc::Rc;
 
-use crate::loc_finder::{LocFinder, LocNotFound, VarRef};
+use crate::error::DebuggerError;
+use crate::loc_finder::{LocFinder, VarRef};
 use crate::unwinder::Unwinder;
 use crate::utils::exit_status_sentinel::check;
 use crate::var::{Type, TypeId, Var};
 
 use anyhow::{anyhow, bail, Result};
 use bytes::{Buf, BufMut, Bytes};
-use thiserror::Error;
 
 pub const WORD_SIZE: usize = 8;
 const READ_MEM_BUF_SIZE: usize = 512;
@@ -43,10 +43,6 @@ impl Breakpoint {
     }
 }
 
-#[derive(Debug, Error)]
-#[error("breakpoint not found")]
-pub struct BreakpointNotFound;
-
 #[derive(Debug)]
 struct Trap {
     original_data: u64,
@@ -64,7 +60,7 @@ pub struct Debugger<R: gimli::Reader> {
     unwinder: Unwinder<R>,
     loc_finder: LocFinder<R>,
     child: process::Child,
-    breakpoints: Vec<Breakpoint>,
+    breakpoints: HashMap<u64, Breakpoint>,
     traps: RefCell<HashMap<u64, Trap>>,
 }
 
@@ -102,7 +98,7 @@ impl<R: gimli::Reader> Debugger<R> {
             unwinder,
             loc_finder,
             child,
-            breakpoints: Vec::new(),
+            breakpoints: HashMap::new(),
             traps: RefCell::new(HashMap::new()),
         };
 
@@ -145,7 +141,6 @@ impl<R: gimli::Reader> Debugger<R> {
         log::trace!("wait for signal");
 
         let mut status: libc::c_int = 0;
-
         check(unsafe { libc::waitpid(self.child_pid(), &mut status as *mut libc::c_int, 0) })?;
 
         if libc::WIFEXITED(status) {
@@ -166,9 +161,9 @@ impl<R: gimli::Reader> Debugger<R> {
             return Ok(());
         }
 
-        if let Some(breakpoint) = self.breakpoints.iter().find(|&breakpoint| breakpoint.addr == prev_addr) {
+        if let Some(breakpoint) = self.breakpoints.get(&prev_addr) {
             log::trace!("stopped at breakpoint {}", breakpoint.loc);
-            self.disable_breakpoint(breakpoint)?;
+            self.disable_bp(breakpoint)?;
             self.rewind()?;
             return Ok(());
         }
@@ -183,14 +178,14 @@ impl<R: gimli::Reader> Debugger<R> {
         let ip = self.get_ip()?;
         log::trace!("now at {:#x}", ip);
 
-        if let Some(breakpoint) = self.breakpoints.iter().find(|&breakpoint| breakpoint.addr == ip) {
+        if let Some(breakpoint) = self.breakpoints.get(&ip) {
             log::trace!("stopped at breakpoint {}", breakpoint.loc);
 
             self.single_step()?;
             if self.get_state() == DebuggerState::Exited {
                 return Ok(());
             }
-            self.enable_breakpoint(breakpoint)?;
+            self.enable_bp(breakpoint)?;
         }
 
         log::trace!("continue from {:#x}", self.get_ip()?);
@@ -370,46 +365,46 @@ impl<R: gimli::Reader> Debugger<R> {
     {
         let loc = loc.into().into_owned();
         let loc = self.prepare_breakpoint_loc(&loc)?;
-        let addr = self.loc_finder.find_loc(&loc)?.ok_or(LocNotFound)?;
+        let addr = self.loc_finder.find_loc(&loc)?.ok_or(DebuggerError::LocNotFound)?;
 
-        log::trace!("set breakpoint at {:#x}", addr);
-
-        let data = check(unsafe { libc::ptrace(libc::PTRACE_PEEKTEXT, self.child_pid(), addr, std::ptr::null_mut::<i8>()) })?;
-
-        let breakpoint = Breakpoint::new(addr, data as u64, loc);
-
-        self.enable_breakpoint(&breakpoint)?;
-
-        self.breakpoints.push(breakpoint);
-
-        Ok(())
-    }
-
-    pub fn list_breakpoints(&self) -> &Vec<Breakpoint> {
-        &self.breakpoints
-    }
-
-    pub fn get_breakpoint(&self, index: usize) -> Option<&Breakpoint> {
-        self.breakpoints.get(index)
-    }
-
-    pub fn remove_breakpoint(&mut self, index: usize) -> Result<()> {
-        if index >= self.breakpoints.len() {
-            bail!(BreakpointNotFound);
+        // can't use entry api here because of borrors
+        if self.breakpoints.contains_key(&addr) {
+            bail!(DebuggerError::BreakpointAlreadyExist)
         }
 
-        let breakpoint = self.breakpoints.remove(index);
+        log::trace!("set breakpoint at {:#x}", addr);
+        let data = check(unsafe { libc::ptrace(libc::PTRACE_PEEKTEXT, self.child_pid(), addr, std::ptr::null_mut::<i8>()) })?;
+        let breakpoint = Breakpoint::new(addr, data as u64, loc);
+        self.enable_bp(&breakpoint)?;
 
-        self.disable_breakpoint(&breakpoint)?;
+        self.breakpoints.insert(addr, breakpoint);
 
         Ok(())
+    }
+
+    pub fn list_breakpoints(&self) -> impl ExactSizeIterator<Item = &Breakpoint> {
+        self.breakpoints.values()
+    }
+
+    pub fn get_breakpoint(&self, loc: &str) -> Option<&Breakpoint> {
+        self.breakpoints.values().find(|&breakpoint| breakpoint.loc == loc)
+    }
+
+    pub fn remove_breakpoint(&mut self, loc: &str) -> Result<()> {
+        match self.get_breakpoint(loc).map(|breakpoint| breakpoint.addr) {
+            Some(addr) => {
+                let breakpoint = self.breakpoints.remove(&addr);
+                self.disable_bp(&breakpoint.unwrap())
+            }
+            None => Err(anyhow!(DebuggerError::BreakpointNotFound)),
+        }
     }
 
     pub fn clear_breakpoints(&mut self) -> Result<()> {
         log::trace!("clear breakpoints");
 
-        for breakpoint in self.breakpoints.iter() {
-            self.disable_breakpoint(breakpoint)?;
+        for breakpoint in self.breakpoints.values() {
+            self.disable_bp(breakpoint)?;
         }
 
         self.breakpoints.clear();
@@ -432,14 +427,21 @@ impl<R: gimli::Reader> Debugger<R> {
 
                 match unit_name {
                     Some(unit_name) => Ok(Cow::from(format!("{}:{}", unit_name, loc))),
-                    None => Err(anyhow!(LocNotFound)),
+                    None => Err(anyhow!(DebuggerError::LocNotFound)),
                 }
             }
             Err(_) => Ok(Cow::from(loc)),
         }
     }
 
-    pub fn enable_breakpoint(&self, breakpoint: &Breakpoint) -> Result<()> {
+    pub fn enable_breakpoint(&self, loc: &str) -> Result<()> {
+        match self.get_breakpoint(loc) {
+            Some(breakpoint) => self.enable_bp(breakpoint),
+            None => Err(anyhow!(DebuggerError::BreakpointNotFound)),
+        }
+    }
+
+    fn enable_bp(&self, breakpoint: &Breakpoint) -> Result<()> {
         let data_with_trap = (breakpoint.original_data & !0xff) | 0xcc;
 
         log::trace!("replace {:#x} with {:#x}", breakpoint.addr, data_with_trap);
@@ -454,7 +456,14 @@ impl<R: gimli::Reader> Debugger<R> {
         Ok(())
     }
 
-    pub fn disable_breakpoint(&self, breakpoint: &Breakpoint) -> Result<()> {
+    pub fn disable_breakpoint(&self, loc: &str) -> Result<()> {
+        match self.get_breakpoint(loc) {
+            Some(breakpoint) => self.disable_bp(breakpoint),
+            None => Err(anyhow!(DebuggerError::BreakpointNotFound)),
+        }
+    }
+
+    fn disable_bp(&self, breakpoint: &Breakpoint) -> Result<()> {
         check(unsafe { libc::ptrace(libc::PTRACE_POKETEXT, self.child_pid(), breakpoint.addr, breakpoint.original_data) })?;
 
         log::trace!("restored data at {:#x} to {:#x}", breakpoint.addr, breakpoint.original_data);
@@ -466,7 +475,7 @@ impl<R: gimli::Reader> Debugger<R> {
 
     fn add_trap(&self, addr: u64) -> Result<()> {
         match self.traps.borrow_mut().entry(addr) {
-            Entry::Occupied(occupied_entry) => Ok(()),
+            Entry::Occupied(_) => Ok(()),
             Entry::Vacant(vacant_entry) => {
                 log::trace!("set trap at {:#x}", addr);
 

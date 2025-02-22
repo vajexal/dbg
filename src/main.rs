@@ -7,6 +7,7 @@ mod unwinder;
 mod utils;
 mod var;
 mod printer;
+mod error;
 
 use std::{io::Write, path::Path};
 

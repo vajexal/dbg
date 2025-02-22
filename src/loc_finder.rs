@@ -3,16 +3,11 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use anyhow::{anyhow, bail, Result};
-use thiserror::Error;
 
 use crate::utils::ranges::Ranges;
 use crate::var::{Field, Type, TypeId};
 
 const MAIN_FUNC_NAME: &str = "main";
-
-#[derive(Debug, Error)]
-#[error("loc not found")]
-pub struct LocNotFound;
 
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
 pub struct EntryRef<Offset: gimli::ReaderOffset> {

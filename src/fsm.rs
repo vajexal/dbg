@@ -22,10 +22,10 @@ impl<'a, R: gimli::Reader> FSM<'a, R> {
             DebuggerState::Started => match command {
                 Commands::Run => commands::control::run(self.debugger)?,
                 Commands::AddBreakpoint { loc } => commands::breakpoints::add(self.debugger, loc)?,
-                Commands::RemoveBreakpoint { index } => commands::breakpoints::remove(self.debugger, index)?,
+                Commands::RemoveBreakpoint { loc } => commands::breakpoints::remove(self.debugger, &loc)?,
                 Commands::ListBreakpoints => commands::breakpoints::list(self.debugger)?,
-                Commands::EnableBreakpoint { index } => commands::breakpoints::enable(self.debugger, index)?,
-                Commands::DisableBreakpoint { index } => commands::breakpoints::disable(self.debugger, index)?,
+                Commands::EnableBreakpoint { loc } => commands::breakpoints::enable(self.debugger, &loc)?,
+                Commands::DisableBreakpoint { loc } => commands::breakpoints::disable(self.debugger, &loc)?,
                 Commands::ClearBreakpoints => commands::breakpoints::clear(self.debugger)?,
                 Commands::Quit => commands::control::stop(self.debugger)?,
                 _ => println!("invalid command"),
@@ -33,10 +33,10 @@ impl<'a, R: gimli::Reader> FSM<'a, R> {
             DebuggerState::Running => match command {
                 Commands::Stop | Commands::Quit => commands::control::stop(self.debugger)?,
                 Commands::AddBreakpoint { loc } => commands::breakpoints::add(self.debugger, loc)?,
-                Commands::RemoveBreakpoint { index } => commands::breakpoints::remove(self.debugger, index)?,
+                Commands::RemoveBreakpoint { loc } => commands::breakpoints::remove(self.debugger, &loc)?,
                 Commands::ListBreakpoints => commands::breakpoints::list(self.debugger)?,
-                Commands::EnableBreakpoint { index } => commands::breakpoints::enable(self.debugger, index)?,
-                Commands::DisableBreakpoint { index } => commands::breakpoints::disable(self.debugger, index)?,
+                Commands::EnableBreakpoint { loc } => commands::breakpoints::enable(self.debugger, &loc)?,
+                Commands::DisableBreakpoint { loc } => commands::breakpoints::disable(self.debugger, &loc)?,
                 Commands::ClearBreakpoints => commands::breakpoints::clear(self.debugger)?,
                 Commands::Continue => commands::control::cont(self.debugger)?,
                 Commands::Step => commands::control::step(self.debugger)?,
@@ -73,17 +73,17 @@ pub enum Commands {
     },
     #[command(visible_alias = "rm")]
     RemoveBreakpoint {
-        index: usize,
+        loc: String,
     },
     #[command(visible_alias = "l")]
     ListBreakpoints,
     #[command(name = "enable")]
     EnableBreakpoint {
-        index: usize,
+        loc: String,
     },
     #[command(name = "disable")]
     DisableBreakpoint {
-        index: usize,
+        loc: String,
     },
     #[command(name = "clear")]
     ClearBreakpoints,
