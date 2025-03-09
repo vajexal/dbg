@@ -524,8 +524,6 @@ impl<R: gimli::Reader> Debugger<R> {
             Some(var_ref) => var_ref,
             None => return Ok(None),
         };
-
-        let current_func = self.loc_finder.find_func_by_address(ip).ok_or(anyhow!("get current func"))?;
         let var = self.get_var_by_entry_ref(name, current_func.as_ref(), var_ref)?;
 
         Ok(Some(var))

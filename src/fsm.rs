@@ -71,11 +71,11 @@ pub enum Commands {
     AddBreakpoint {
         loc: String,
     },
-    #[command(visible_alias = "rm")]
+    #[command(name = "remove", visible_alias = "rm")]
     RemoveBreakpoint {
         loc: String,
     },
-    #[command(visible_alias = "l")]
+    #[command(name = "list", visible_alias = "l")]
     ListBreakpoints,
     #[command(name = "enable")]
     EnableBreakpoint {

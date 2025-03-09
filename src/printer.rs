@@ -40,11 +40,14 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                 }
                 write!(f, "void")?;
             }
-            Type::Base { name, .. } => {
+            Type::Base { name, encoding, .. } => {
                 if !path.is_empty() {
                     bail!(InvalidPathError);
                 }
-                write!(f, "{}", name)?;
+                match *encoding {
+                    gimli::DW_ATE_boolean => write!(f, "bool")?,
+                    _ => write!(f, "{}", name)?,
+                };
             }
             Type::Const(subtype_id) => {
                 write!(f, "const ")?;

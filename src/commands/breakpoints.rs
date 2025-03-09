@@ -9,23 +9,25 @@ where
     R: gimli::Reader,
     S: Into<Cow<'a, str>>,
 {
-    if let Err(e) = debugger.add_breakpoint(loc) {
-        match e.downcast_ref::<DebuggerError>() {
+    match debugger.add_breakpoint(loc) {
+        Ok(_) => println!("breakpoint set"),
+        Err(e) => match e.downcast_ref::<DebuggerError>() {
             Some(_) => println!("{}", e),
             None => return Err(e),
-        }
-    }
+        },
+    };
 
     Ok(())
 }
 
 pub fn remove<R: gimli::Reader>(debugger: &mut Debugger<R>, loc: &str) -> Result<()> {
-    if let Err(e) = debugger.remove_breakpoint(loc) {
-        match e.downcast_ref::<DebuggerError>() {
+    match debugger.remove_breakpoint(loc) {
+        Ok(_) => println!("breakpoint removed"),
+        Err(e) => match e.downcast_ref::<DebuggerError>() {
             Some(_) => println!("{}", e),
             None => return Err(e),
-        }
-    }
+        },
+    };
 
     Ok(())
 }
@@ -46,23 +48,25 @@ pub fn list<R: gimli::Reader>(debugger: &Debugger<R>) -> Result<()> {
 }
 
 pub fn enable<R: gimli::Reader>(debugger: &Debugger<R>, loc: &str) -> Result<()> {
-    if let Err(e) = debugger.enable_breakpoint(loc) {
-        match e.downcast_ref::<DebuggerError>() {
+    match debugger.enable_breakpoint(loc) {
+        Ok(_) => println!("breakpoint enabled"),
+        Err(e) => match e.downcast_ref::<DebuggerError>() {
             Some(_) => println!("{}", e),
             None => return Err(e),
-        }
-    }
+        },
+    };
 
     Ok(())
 }
 
 pub fn disable<R: gimli::Reader>(debugger: &Debugger<R>, loc: &str) -> Result<()> {
-    if let Err(e) = debugger.disable_breakpoint(loc) {
-        match e.downcast_ref::<DebuggerError>() {
+    match debugger.disable_breakpoint(loc) {
+        Ok(_) => println!("breakpoint disabled"),
+        Err(e) => match e.downcast_ref::<DebuggerError>() {
             Some(_) => println!("{}", e),
             None => return Err(e),
-        }
-    }
+        },
+    };
 
     Ok(())
 }

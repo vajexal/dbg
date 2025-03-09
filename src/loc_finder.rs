@@ -1,5 +1,6 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use anyhow::{anyhow, bail, Result};
@@ -340,11 +341,21 @@ impl<R: gimli::Reader> LocFinder<R> {
         let mut rows = program.rows();
 
         while let Some((header, row)) = rows.next_row()? {
-            let filepath: Rc<str> = match row.file(&header) {
-                Some(file) => Rc::from(unit_ref.attr_string(file.path_name())?.to_string()?),
-                None => bail!("get path name"),
+            let file = match row.file(&header) {
+                Some(file) => file,
+                None => bail!("get path"),
             };
 
+            // build file path
+            let mut path = PathBuf::new();
+            if file.directory_index() != 0 {
+                let dir = file.directory(&header).ok_or(anyhow!("get directory"))?;
+                path.push(unit_ref.attr_string(dir)?.to_string()?.as_ref());
+            }
+            path.push(unit_ref.attr_string(file.path_name())?.to_string()?.as_ref());
+            let filepath = Rc::from(path.into_os_string().into_string().map_err(|_| anyhow!("convert path to string"))?);
+
+            // build file line
             let line = row.line().ok_or(anyhow!("get line number"))?.get() as usize;
             let fileline: Rc<str> = Rc::from(format!("{}:{}", filepath, line));
 
@@ -453,9 +464,9 @@ impl<R: gimli::Reader> LocFinder<R> {
     }
 
     pub fn get_var(&self, name: &str, func_name: Option<&str>) -> Option<VarRef<R::Offset>> {
-        match func_name {
-            Some(func_name) => self.func_variables.get(func_name).and_then(|vars| vars.get(name).copied()),
-            None => self.global_variables.get(name).copied(),
-        }
+        func_name
+            .and_then(|func_name| self.func_variables.get(func_name))
+            .and_then(|vars| vars.get(name).copied())
+            .or_else(|| self.global_variables.get(name).copied())
     }
 }
