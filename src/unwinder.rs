@@ -22,15 +22,15 @@ impl<R: gimli::Reader> Unwinder<R> {
         }
     }
 
-    pub fn unwind_cfa(&self, address: u64) -> gimli::Result<gimli::CfaRule<R::Offset>> {
+    pub fn unwind_cfa(&self, relative_address: u64) -> gimli::Result<gimli::CfaRule<R::Offset>> {
         let mut ctx = self.ctx.borrow_mut();
 
         let unwind_info = match &self.unwind_frame {
             UnwindFrame::DebugFrame(debug_frame) => {
-                debug_frame.unwind_info_for_address(&self.bases, ctx.deref_mut(), address, gimli::DebugFrame::cie_from_offset)
+                debug_frame.unwind_info_for_address(&self.bases, ctx.deref_mut(), relative_address, gimli::DebugFrame::cie_from_offset)
             }
             // todo binary search
-            UnwindFrame::EhFrame(eh_frame) => eh_frame.unwind_info_for_address(&self.bases, ctx.deref_mut(), address, gimli::EhFrame::cie_from_offset),
+            UnwindFrame::EhFrame(eh_frame) => eh_frame.unwind_info_for_address(&self.bases, ctx.deref_mut(), relative_address, gimli::EhFrame::cie_from_offset),
         }?;
 
         Ok(unwind_info.cfa().clone())

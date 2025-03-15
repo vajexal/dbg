@@ -1,13 +1,13 @@
 mod commands;
 mod debugger;
+mod error;
 mod fsm;
 mod loader;
 mod loc_finder;
+mod printer;
 mod unwinder;
 mod utils;
 mod var;
-mod printer;
-mod error;
 
 use std::{io::Write, path::Path};
 
@@ -29,8 +29,8 @@ fn main() -> Result<()> {
     let prog_path = Path::new(&args[0]);
 
     let loader = Loader::new();
-    let (dwarf, unwinder) = loader.load(prog_path)?;
-    let mut debugger = Debugger::start(prog_path, &args[1..], dwarf, unwinder)?;
+    let (dwarf, unwinder, object_kind) = loader.load(prog_path)?;
+    let mut debugger = Debugger::start(prog_path, &args[1..], dwarf, unwinder, object_kind)?;
     let mut fsm = FSM::new(&mut debugger);
 
     loop {

@@ -60,6 +60,7 @@ pub struct Debugger<R: gimli::Reader> {
     unwinder: Unwinder<R>,
     loc_finder: LocFinder<R>,
     child: process::Child,
+    base_address: u64,
     breakpoints: HashMap<u64, Breakpoint>,
     traps: RefCell<HashMap<u64, Trap>>,
 }
@@ -72,13 +73,11 @@ pub enum DebuggerState {
 }
 
 impl<R: gimli::Reader> Debugger<R> {
-    pub fn start<I, S>(prog: &Path, args: I, dwarf: gimli::Dwarf<R>, unwinder: Unwinder<R>) -> Result<Self>
+    pub fn start<I, S>(prog: &Path, args: I, dwarf: gimli::Dwarf<R>, unwinder: Unwinder<R>, object_kind: object::ObjectKind) -> Result<Self>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let loc_finder = LocFinder::new(&dwarf)?;
-
         let mut command = process::Command::new(&prog);
 
         unsafe {
@@ -92,12 +91,18 @@ impl<R: gimli::Reader> Debugger<R> {
 
         let child = command.args(args).spawn()?;
 
+        let base_address = Self::get_base_address(child.id(), object_kind)?;
+        log::trace!("base address {:#x}", base_address);
+
+        let loc_finder = LocFinder::new(&dwarf, base_address)?;
+
         let debugger = Self {
             state: Cell::new(DebuggerState::Started),
             dwarf,
             unwinder,
             loc_finder,
             child,
+            base_address,
             breakpoints: HashMap::new(),
             traps: RefCell::new(HashMap::new()),
         };
@@ -588,7 +593,7 @@ impl<R: gimli::Reader> Debugger<R> {
                 }
                 gimli::EvaluationResult::RequiresCallFrameCfa => {
                     let ip = self.get_ip()?;
-                    let cfa = self.unwinder.unwind_cfa(ip)?;
+                    let cfa = self.unwinder.unwind_cfa(ip - self.base_address)?;
 
                     let cfa_value = match cfa {
                         gimli::CfaRule::RegisterAndOffset { register, offset } => {
@@ -610,7 +615,7 @@ impl<R: gimli::Reader> Debugger<R> {
                 gimli::EvaluationResult::RequiresRelocatedAddress(address) => {
                     log::trace!("requires relocated address {:#x}", address);
                     // todo seems like relative address (PIE)
-                    result = eval.resume_with_relocated_address(address)?;
+                    result = eval.resume_with_relocated_address(self.base_address + address)?;
                 }
                 _ => bail!("can't provide {:?}", result),
             }
@@ -726,5 +731,19 @@ impl<R: gimli::Reader> Debugger<R> {
         procmem.read_exact(buf.as_mut_slice())?;
 
         Ok(())
+    }
+
+    fn get_base_address(child_pid: u32, object_kind: object::ObjectKind) -> Result<u64> {
+        if object_kind != object::ObjectKind::Dynamic {
+            return Ok(0);
+        }
+
+        let mut buf = vec![0; 16];
+        let mut procmaps = fs::File::open(format!("/proc/{}/maps", child_pid))?;
+        procmaps.read(&mut buf)?;
+        let (base_address, _) = std::str::from_utf8(&buf)?.split_once('-').ok_or(anyhow!("invalid proc maps"))?;
+        let base_address = u64::from_str_radix(base_address, 16)?;
+
+        Ok(base_address)
     }
 }

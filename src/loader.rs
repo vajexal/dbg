@@ -29,6 +29,7 @@ impl Loader {
     ) -> Result<(
         gimli::Dwarf<gimli::EndianSlice<'_, gimli::RunTimeEndian>>,
         Unwinder<gimli::EndianSlice<'_, gimli::RunTimeEndian>>,
+        object::ObjectKind,
     )> {
         let file = fs::File::open(prog)?;
         let map = self.arena_mmap.alloc(unsafe { Mmap::map(&file)? });
@@ -73,6 +74,6 @@ impl Loader {
         };
         let unwinder = Unwinder::new(unwind_frame, bases);
 
-        Ok((dwarf, unwinder))
+        Ok((dwarf, unwinder, object.kind()))
     }
 }

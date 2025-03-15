@@ -1,9 +1,8 @@
-from tests import Step, debug_code
+from tests import Step
 
 
-def test_step(tmp_path):
-    debug_code(
-        tmp_path,
+def test_step(debugger):
+    debugger(
         code="""#include <stdio.h>
 
 int x = 0;
@@ -34,9 +33,8 @@ int main()
     )
 
 
-def test_step_in(tmp_path):
-    debug_code(
-        tmp_path,
+def test_step_in(debugger):
+    debugger(
         code="""#include <stdio.h>
 
 int x = 0;
@@ -70,9 +68,8 @@ int main()
     )
 
 
-def test_step_out(tmp_path):
-    debug_code(
-        tmp_path,
+def test_step_out(debugger):
+    debugger(
         code="""#include <stdio.h>
 
 int x = 0;

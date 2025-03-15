@@ -1,9 +1,8 @@
-from tests import Step, debug_code
+from tests import Step
 
 
-def test_breakpoints(tmp_path):
-    debug_code(
-        tmp_path,
+def test_breakpoints(debugger):
+    debugger(
         code="""#include <stdio.h>
 
 int main()
@@ -31,9 +30,8 @@ int main()
     )
 
 
-def test_run_through_disabled_breakpoint(tmp_path):
-    debug_code(
-        tmp_path,
+def test_run_through_disabled_breakpoint(debugger):
+    debugger(
         code="""#include <stdio.h>
 
 int main()
@@ -54,9 +52,8 @@ int main()
     )
 
 
-def test_run_stop_at_reenabled_breakpoint(tmp_path):
-    debug_code(
-        tmp_path,
+def test_run_stop_at_reenabled_breakpoint(debugger):
+    debugger(
         code="""#include <stdio.h>
 
 int main()

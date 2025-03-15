@@ -39,6 +39,7 @@ const VOID_TYPE_ID: TypeId = 0;
 #[derive(Debug)]
 pub struct LocFinder<R: gimli::Reader> {
     // todo string table
+    base_address: u64,
     locations: HashMap<Rc<str>, u64>,  // location -> address
     addr2line: HashMap<u64, Rc<str>>,  // address -> line
     lines: HashMap<Rc<str>, Vec<u64>>, // filepath -> { line: address }
@@ -52,8 +53,9 @@ pub struct LocFinder<R: gimli::Reader> {
 }
 
 impl<R: gimli::Reader> LocFinder<R> {
-    pub fn new(dwarf: &gimli::Dwarf<R>) -> Result<Self> {
+    pub fn new(dwarf: &gimli::Dwarf<R>, base_address: u64) -> Result<Self> {
         let mut loc_finder = Self {
+            base_address,
             funcs: HashMap::new(),
             locations: HashMap::new(),
             addr2line: HashMap::new(),
@@ -109,12 +111,12 @@ impl<R: gimli::Reader> LocFinder<R> {
         let name: Rc<str> = Rc::from(unit_ref.attr_string(name_attr)?.to_string()?);
 
         let low_pc_attr = entry.attr_value(gimli::DW_AT_low_pc)?.ok_or(anyhow!("get low_pc attr"))?;
-        let low_pc = unit_ref.attr_address(low_pc_attr)?.ok_or(anyhow!("get low_pc value"))?;
+        let low_pc = self.base_address + unit_ref.attr_address(low_pc_attr)?.ok_or(anyhow!("get low_pc value"))?;
 
         let high_pc_attr = entry.attr_value(gimli::DW_AT_high_pc)?.ok_or(anyhow!("get high_pc attr"))?;
         let high_pc = match high_pc_attr {
             gimli::AttributeValue::Udata(size) => low_pc + size,
-            high_pc => unit_ref.attr_address(high_pc)?.ok_or(anyhow!("get high_pc value"))?,
+            high_pc => self.base_address + unit_ref.attr_address(high_pc)?.ok_or(anyhow!("get high_pc value"))?,
         };
 
         // high_pc is the address of the first location past the last instruction associated with the entity,
@@ -143,7 +145,7 @@ impl<R: gimli::Reader> LocFinder<R> {
             Some(value) => value,
             None => return Ok(()),
         };
-        let low_pc = unit_ref.attr_address(low_pc_attr)?.ok_or(anyhow!("get low_pc value"))?;
+        let low_pc = self.base_address + unit_ref.attr_address(low_pc_attr)?.ok_or(anyhow!("get low_pc value"))?;
 
         self.locations.insert(name.clone(), low_pc);
 
@@ -158,7 +160,7 @@ impl<R: gimli::Reader> LocFinder<R> {
         };
         let high_pc = match high_pc_attr {
             gimli::AttributeValue::Udata(size) => low_pc + size,
-            high_pc => unit_ref.attr_address(high_pc)?.ok_or(anyhow!("get high pc value"))?,
+            high_pc => self.base_address + unit_ref.attr_address(high_pc)?.ok_or(anyhow!("get high pc value"))?,
         };
 
         // high_pc is the address of the first location past the last instruction associated with the entity,
@@ -359,8 +361,9 @@ impl<R: gimli::Reader> LocFinder<R> {
             let line = row.line().ok_or(anyhow!("get line number"))?.get() as usize;
             let fileline: Rc<str> = Rc::from(format!("{}:{}", filepath, line));
 
-            self.locations.insert(fileline.clone(), row.address());
-            self.addr2line.insert(row.address(), fileline);
+            let address = self.base_address + row.address();
+            self.locations.insert(fileline.clone(), address);
+            self.addr2line.insert(address, fileline);
 
             if row.end_sequence() {
                 continue;
@@ -373,7 +376,7 @@ impl<R: gimli::Reader> LocFinder<R> {
             }
             // save only first line appearance
             if lines.len() == line {
-                lines.push(row.address());
+                lines.push(address);
             }
         }
 

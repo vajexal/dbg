@@ -1,9 +1,8 @@
-from tests import Step, debug_code
+from tests import Step
 
 
-def test_print_primitive(tmp_path):
-    debug_code(
-        tmp_path,
+def test_print_primitive(debugger):
+    debugger(
         code="""#include <stdio.h>
 #include <stdbool.h>
 
@@ -31,9 +30,8 @@ int main()
     )
 
 
-def test_print_void_ptr(tmp_path):
-    debug_code(
-        tmp_path,
+def test_print_void_ptr(debugger):
+    debugger(
         code="""#include <stdio.h>
 
 int main()
@@ -54,9 +52,8 @@ int main()
     )
 
 
-def test_print_node(tmp_path):
-    debug_code(
-        tmp_path,
+def test_print_node(debugger):
+    debugger(
         code="""#include <stdio.h>
 #include <stdlib.h>
 
