@@ -22,8 +22,14 @@ int main()
             Step("p i", "int i = 123"),
             Step("p f", "float f = 3.14"),
             Step("p b", "bool b = true"),
-            Step("p s", "const char* s = \"hello world\""),
+            Step("p s", 'const char* s = "hello world"'),
             Step("p x", "x not found"),
+            Step("p", [
+                "int i = 123",
+                "float f = 3.14",
+                "bool b = true",
+                'const char* s = "hello world"'
+            ]),
             Step("c"),
             Step("q"),
         ]
