@@ -52,7 +52,7 @@ int main()
     )
 
 
-def test_run_stop_at_reenabled_breakpoint(debugger):
+def test_stop_at_reenabled_breakpoint(debugger):
     debugger(
         code="""#include <stdio.h>
 
@@ -67,7 +67,28 @@ int main()
             Step("b 5", "breakpoint set"),
             Step("disable t.c:5", "breakpoint disabled"),
             Step("enable t.c:5", "breakpoint enabled"),
-            Step("stop"),
+            Step("r"),
+            Step("stop"),  # assert program running
+            Step("q"),
+        ],
+        filename="t"
+    )
+
+
+def test_breakpoint_by_func_name(debugger):
+    debugger(
+        code="""#include <stdio.h>
+
+int main()
+{
+    printf("hello world\\n");
+    return 0;
+}
+""",
+        steps=[
+            Step("b main", "breakpoint set"),
+            Step("r"),
+            Step("stop"),  # assert program running
             Step("q"),
         ],
         filename="t"
