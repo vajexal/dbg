@@ -514,16 +514,8 @@ impl<R: gimli::Reader> Debugger<R> {
         self.loc_finder.get_type(type_id)
     }
 
-    // todo decouple
-    pub fn get_type_size(&self, type_id: TypeId) -> usize {
-        match self.get_type(type_id) {
-            Type::Void => 0, // todo maybe should panic
-            Type::Base { size, .. } => *size as usize,
-            Type::Const(subtype_id) => self.get_type_size(*subtype_id),
-            Type::Pointer(_) => WORD_SIZE,
-            Type::Struct { size, .. } => *size as usize,
-            Type::Typedef(_, subtype_id) => self.get_type_size(*subtype_id),
-        }
+    pub fn get_type_size(&self, type_id: TypeId) -> Result<usize> {
+        self.loc_finder.get_type_size(type_id)
     }
 
     fn eval_expr(&self, expr: gimli::Expression<R>, unit_ref: &gimli::UnitRef<R>, current_func: &str) -> Result<gimli::Evaluation<R>> {

@@ -84,7 +84,7 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
     }
 
     fn print_value(&self, f: &mut impl io::Write, var: &Var<R>, path: &[&str]) -> Result<()> {
-        let size = self.debugger.get_type_size(var.type_id);
+        let size = self.debugger.get_type_size(var.type_id)?;
         let buf = self.debugger.read_location(&var.location, size)?;
         self.print_bytes(f, buf, var.type_id, path)
     }
@@ -157,7 +157,7 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                 if path.is_empty() {
                     write!(f, "&")?;
                 }
-                let size = self.debugger.get_type_size(*subtype_id);
+                let size = self.debugger.get_type_size(*subtype_id)?;
                 let buf = self.debugger.read_address(ptr, size)?;
                 self.print_bytes(f, buf, *subtype_id, path)?;
             }

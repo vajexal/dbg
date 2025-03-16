@@ -5,6 +5,7 @@ use std::rc::Rc;
 
 use anyhow::{anyhow, bail, Result};
 
+use crate::debugger::WORD_SIZE;
 use crate::utils::ranges::Ranges;
 use crate::var::{Field, Type, TypeId};
 
@@ -333,6 +334,17 @@ impl<R: gimli::Reader> LocFinder<R> {
 
     pub fn get_type(&self, type_id: TypeId) -> &Type {
         self.types.get(type_id).unwrap()
+    }
+
+    pub fn get_type_size(&self, type_id: TypeId) -> Result<usize> {
+        match self.get_type(type_id) {
+            Type::Void => Err(anyhow!("void have no size")),
+            Type::Base { size, .. } => Ok(*size as usize),
+            Type::Const(subtype_id) => self.get_type_size(*subtype_id),
+            Type::Pointer(_) => Ok(WORD_SIZE),
+            Type::Struct { size, .. } => Ok(*size as usize),
+            Type::Typedef(_, subtype_id) => self.get_type_size(*subtype_id),
+        }
     }
 
     fn find_lines(&mut self, unit_ref: &gimli::UnitRef<R>) -> Result<()> {
