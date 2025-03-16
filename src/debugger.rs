@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, Read, Seek};
-use std::mem;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process;
@@ -14,11 +13,12 @@ use std::rc::Rc;
 use crate::error::DebuggerError;
 use crate::loc_finder::{LocFinder, VarRef};
 use crate::unwinder::Unwinder;
-use crate::utils::exit_status_sentinel::check;
 use crate::var::{Type, TypeId, Var};
 
 use anyhow::{anyhow, bail, Result};
 use bytes::{Buf, BufMut, Bytes};
+use nix::sys::{ptrace, wait};
+use nix::unistd::Pid;
 
 pub const WORD_SIZE: usize = 8;
 const READ_MEM_BUF_SIZE: usize = 512;
@@ -27,13 +27,13 @@ const FUNC_PROLOGUE_MAGIC_BYTES: [u8; 8] = [0xf3, 0x0f, 0x1e, 0xfa, 0x55, 0x48, 
 #[derive(Debug, Clone)]
 pub struct Breakpoint {
     addr: u64,
-    original_data: u64,
+    original_data: i64,
     pub loc: String,
     pub enabled: Cell<bool>,
 }
 
 impl Breakpoint {
-    pub fn new<S: Into<String>>(addr: u64, original_data: u64, loc: S) -> Self {
+    pub fn new<S: Into<String>>(addr: u64, original_data: i64, loc: S) -> Self {
         Self {
             addr,
             original_data,
@@ -45,11 +45,11 @@ impl Breakpoint {
 
 #[derive(Debug)]
 struct Trap {
-    original_data: u64,
+    original_data: i64,
 }
 
 impl Trap {
-    fn new(original_data: u64) -> Self {
+    fn new(original_data: i64) -> Self {
         Self { original_data }
     }
 }
@@ -82,9 +82,7 @@ impl<R: gimli::Reader> Debugger<R> {
 
         unsafe {
             command.pre_exec(|| {
-                // todo nix crate
-                check(libc::ptrace(libc::PTRACE_TRACEME, 0, std::ptr::null_mut::<i8>(), std::ptr::null_mut::<i8>()))?;
-
+                ptrace::traceme()?;
                 Ok(())
             });
         }
@@ -114,8 +112,8 @@ impl<R: gimli::Reader> Debugger<R> {
         Ok(debugger)
     }
 
-    fn child_pid(&self) -> libc::pid_t {
-        self.child.id() as libc::pid_t
+    fn child_pid(&self) -> Pid {
+        Pid::from_raw(self.child.id() as libc::pid_t)
     }
 
     pub fn get_state(&self) -> DebuggerState {
@@ -123,7 +121,7 @@ impl<R: gimli::Reader> Debugger<R> {
     }
 
     pub fn run(&self) -> Result<()> {
-        check(unsafe { libc::ptrace(libc::PTRACE_CONT, self.child_pid(), std::ptr::null_mut::<i8>(), std::ptr::null_mut::<i8>()) })?;
+        ptrace::cont(self.child_pid(), None)?;
 
         self.state.set(DebuggerState::Running);
 
@@ -145,10 +143,7 @@ impl<R: gimli::Reader> Debugger<R> {
 
         log::trace!("wait for signal");
 
-        let mut status: libc::c_int = 0;
-        check(unsafe { libc::waitpid(self.child_pid(), &mut status as *mut libc::c_int, 0) })?;
-
-        if libc::WIFEXITED(status) {
+        if let wait::WaitStatus::Exited(_, _) = wait::waitpid(self.child_pid(), None)? {
             log::trace!("child exited");
             self.state.set(DebuggerState::Exited);
             return Ok(());
@@ -194,21 +189,13 @@ impl<R: gimli::Reader> Debugger<R> {
         }
 
         log::trace!("continue from {:#x}", self.get_ip()?);
-        check(unsafe { libc::ptrace(libc::PTRACE_CONT, self.child_pid(), std::ptr::null_mut::<i8>(), std::ptr::null_mut::<i8>()) })?;
+        ptrace::cont(self.child_pid(), None)?;
         self.state.set(DebuggerState::Running);
         Ok(())
     }
 
     fn single_step(&self) -> Result<()> {
-        check(unsafe {
-            libc::ptrace(
-                libc::PTRACE_SINGLESTEP,
-                self.child_pid(),
-                std::ptr::null_mut::<i8>(),
-                std::ptr::null_mut::<i8>(),
-            )
-        })?;
-
+        ptrace::step(self.child_pid(), None)?;
         self.wait()
     }
 
@@ -275,30 +262,10 @@ impl<R: gimli::Reader> Debugger<R> {
     fn rewind(&self) -> Result<()> {
         log::trace!("rewind");
 
-        let mut regs: libc::user_regs_struct = unsafe { mem::zeroed() };
-
-        check(unsafe {
-            libc::ptrace(
-                libc::PTRACE_GETREGS,
-                self.child_pid(),
-                std::ptr::null_mut::<i8>(),
-                &mut regs as *mut libc::user_regs_struct as *mut i8,
-            )
-        })?;
-
+        let mut regs = ptrace::getregs(self.child_pid())?;
         log::trace!("current ip {:#x}", regs.rip);
-
         regs.rip -= 1;
-
-        check(unsafe {
-            libc::ptrace(
-                libc::PTRACE_SETREGS,
-                self.child_pid(),
-                std::ptr::null_mut::<i8>(),
-                &mut regs as *mut libc::user_regs_struct as *mut i8,
-            )
-        })?;
-
+        ptrace::setregs(self.child_pid(), regs)?;
         log::trace!("new ip {:#x}", regs.rip);
 
         Ok(())
@@ -334,17 +301,7 @@ impl<R: gimli::Reader> Debugger<R> {
 
     /// get instruction pointer
     fn get_ip(&self) -> Result<u64> {
-        let mut regs: libc::user_regs_struct = unsafe { mem::zeroed() };
-
-        check(unsafe {
-            libc::ptrace(
-                libc::PTRACE_GETREGS,
-                self.child_pid(),
-                std::ptr::null_mut::<i8>(),
-                &mut regs as *mut libc::user_regs_struct as *mut i8,
-            )
-        })?;
-
+        let regs = ptrace::getregs(self.child_pid())?;
         Ok(regs.rip)
     }
 
@@ -378,8 +335,8 @@ impl<R: gimli::Reader> Debugger<R> {
         }
 
         log::trace!("set breakpoint at {:#x}", addr);
-        let data = check(unsafe { libc::ptrace(libc::PTRACE_PEEKTEXT, self.child_pid(), addr, std::ptr::null_mut::<i8>()) })?;
-        let breakpoint = Breakpoint::new(addr, data as u64, loc);
+        let data = ptrace::read(self.child_pid(), addr as ptrace::AddressType)?;
+        let breakpoint = Breakpoint::new(addr, data, loc);
         self.enable_bp(&breakpoint)?;
 
         self.breakpoints.insert(addr, breakpoint);
@@ -450,12 +407,11 @@ impl<R: gimli::Reader> Debugger<R> {
         let data_with_trap = (breakpoint.original_data & !0xff) | 0xcc;
 
         log::trace!("replace {:#x} with {:#x}", breakpoint.addr, data_with_trap);
-
-        check(unsafe { libc::ptrace(libc::PTRACE_POKETEXT, self.child_pid(), breakpoint.addr, data_with_trap) })?;
+        ptrace::write(self.child_pid(), breakpoint.addr as ptrace::AddressType, data_with_trap)?;
 
         breakpoint.enabled.set(true);
 
-        let readback_data = check(unsafe { libc::ptrace(libc::PTRACE_PEEKTEXT, self.child_pid(), breakpoint.addr, std::ptr::null_mut::<i8>()) })?;
+        let readback_data = ptrace::read(self.child_pid(), breakpoint.addr as ptrace::AddressType)?;
         log::trace!("data after trap {:#x}: {:#x}", breakpoint.addr, readback_data);
 
         Ok(())
@@ -469,8 +425,7 @@ impl<R: gimli::Reader> Debugger<R> {
     }
 
     fn disable_bp(&self, breakpoint: &Breakpoint) -> Result<()> {
-        check(unsafe { libc::ptrace(libc::PTRACE_POKETEXT, self.child_pid(), breakpoint.addr, breakpoint.original_data) })?;
-
+        ptrace::write(self.child_pid(), breakpoint.addr as ptrace::AddressType, breakpoint.original_data)?;
         log::trace!("restored data at {:#x} to {:#x}", breakpoint.addr, breakpoint.original_data);
 
         breakpoint.enabled.set(false);
@@ -484,16 +439,16 @@ impl<R: gimli::Reader> Debugger<R> {
             Entry::Vacant(vacant_entry) => {
                 log::trace!("set trap at {:#x}", addr);
 
-                let original_data = check(unsafe { libc::ptrace(libc::PTRACE_PEEKTEXT, self.child_pid(), addr, std::ptr::null_mut::<i8>()) })?;
+                let original_data = ptrace::read(self.child_pid(), addr as ptrace::AddressType)?;
                 let data_with_trap = (original_data & !0xff) | 0xcc;
 
                 log::trace!("replace {:#x} with {:#x}", addr, data_with_trap);
-                check(unsafe { libc::ptrace(libc::PTRACE_POKETEXT, self.child_pid(), addr, data_with_trap) })?;
+                ptrace::write(self.child_pid(), addr as ptrace::AddressType, data_with_trap)?;
 
-                let readback_data = check(unsafe { libc::ptrace(libc::PTRACE_PEEKTEXT, self.child_pid(), addr, std::ptr::null_mut::<i8>()) })?;
+                let readback_data = ptrace::read(self.child_pid(), addr as ptrace::AddressType)?;
                 log::trace!("data after trap {:#x}: {:#x}", addr, readback_data);
 
-                vacant_entry.insert(Trap::new(original_data as u64));
+                vacant_entry.insert(Trap::new(original_data));
 
                 Ok(())
             }
@@ -502,7 +457,7 @@ impl<R: gimli::Reader> Debugger<R> {
 
     fn remove_trap(&self, addr: u64) -> Result<()> {
         if let Some(trap) = self.traps.borrow_mut().remove(&addr) {
-            check(unsafe { libc::ptrace(libc::PTRACE_POKETEXT, self.child_pid(), addr, trap.original_data) })?;
+            ptrace::write(self.child_pid(), addr as ptrace::AddressType, trap.original_data)?;
             log::trace!("restored data at {:#x} to {:#x}", addr, trap.original_data);
         }
 
@@ -626,17 +581,7 @@ impl<R: gimli::Reader> Debugger<R> {
 
     fn get_register_value(&self, register: gimli::Register) -> Result<u64> {
         let register_name = gimli::X86_64::register_name(register).ok_or(anyhow!("get {} register", register.0))?;
-
-        let mut regs: libc::user_regs_struct = unsafe { mem::zeroed() };
-
-        check(unsafe {
-            libc::ptrace(
-                libc::PTRACE_GETREGS,
-                self.child_pid(),
-                std::ptr::null_mut::<i8>(),
-                &mut regs as *mut libc::user_regs_struct as *mut i8,
-            )
-        })?;
+        let regs = ptrace::getregs(self.child_pid())?;
 
         let value = match register_name {
             "rax" => regs.rax,

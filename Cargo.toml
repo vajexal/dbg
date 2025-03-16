@@ -12,6 +12,7 @@ gimli = "0.31.1"
 libc = "0.2.167"
 log = "0.4.22"
 memmap2 = "0.9.5"
+nix = { version = "0.29.0", features = ["ptrace", "process"] }
 object = "0.36.5"
 shlex = "1.3.0"
 thiserror = "2.0.11"
