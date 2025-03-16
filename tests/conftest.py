@@ -49,10 +49,14 @@ def debugger(tmp_path_factory):
                         if type(step.expected_output) is str:
                             output = child.stdout.readline()
                             assert step.expected_output in output, "expected '{}' in '{}'".format(step.expected_output, output)
+                            if step.not_expected_output:
+                                assert step.not_expected_output not in output, "not expected '{}' in '{}'".format(step.not_expected_output, output)
                         else:
                             for _ in step.expected_output:
                                 output = child.stdout.readline()
                                 assert any(expected in output for expected in step.expected_output), "{} not found in {}".format(output, step.expected_output)
+                                if step.not_expected_output:
+                                    assert step.not_expected_output not in output, "not expected '{}' in '{}'".format(step.not_expected_output, output)
 
                 assert child.wait() == 0
 

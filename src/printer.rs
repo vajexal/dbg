@@ -21,13 +21,15 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
     }
 
     pub fn print(&self, var: &Var<R>, path: &[&str]) -> Result<()> {
-        let mut lock = io::stdout().lock();
+        // we don't use stdout lock because we want print nothing in case of error
+        let mut buf = Vec::new();
 
-        self.print_type(&mut lock, var.type_id, path)?;
+        self.print_type(&mut buf, var.type_id, path)?;
         let name = path.last().copied().unwrap_or(var.name.as_str());
-        write!(lock, " {} = ", name)?;
-        self.print_value(&mut lock, var, path)?;
-        write!(lock, "\n")?;
+        write!(buf, " {} = ", name)?;
+        self.print_value(&mut buf, var, path)?;
+
+        println!("{}", std::str::from_utf8(&buf)?);
 
         Ok(())
     }
