@@ -97,6 +97,7 @@ impl<T: PartialOrd> AVLTree<T> {
         node.as_ref().map_or(0, |n| n.height)
     }
 
+    #[allow(dead_code)]
     pub fn iter(&self) -> AVLTreeIterator<T> {
         AVLTreeIterator {
             stack: Vec::new(),

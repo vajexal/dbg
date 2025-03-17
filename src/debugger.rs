@@ -561,7 +561,6 @@ impl<R: gimli::Reader> Debugger<R> {
                 }
                 gimli::EvaluationResult::RequiresRelocatedAddress(address) => {
                     log::trace!("requires relocated address {:#x}", address);
-                    // todo seems like relative address (PIE)
                     result = eval.resume_with_relocated_address(self.base_address + address)?;
                 }
                 _ => bail!("can't provide {:?}", result),
