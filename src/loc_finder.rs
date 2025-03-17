@@ -5,8 +5,8 @@ use std::rc::Rc;
 
 use anyhow::{anyhow, bail, Result};
 
-use crate::debugger::WORD_SIZE;
 use crate::utils::ranges::Ranges;
+use crate::utils::WORD_SIZE;
 use crate::var::{Field, Type, TypeId};
 
 const MAIN_FUNC_NAME: &str = "main";

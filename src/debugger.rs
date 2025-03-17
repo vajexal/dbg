@@ -13,6 +13,7 @@ use std::rc::Rc;
 use crate::error::DebuggerError;
 use crate::loc_finder::{LocFinder, VarRef};
 use crate::unwinder::Unwinder;
+use crate::utils::WORD_SIZE;
 use crate::var::{Type, TypeId, Var};
 
 use anyhow::{anyhow, bail, Result};
@@ -20,7 +21,6 @@ use bytes::{Buf, BufMut, Bytes};
 use nix::sys::{ptrace, wait};
 use nix::unistd::Pid;
 
-pub const WORD_SIZE: usize = 8;
 const READ_MEM_BUF_SIZE: usize = 512;
 const FUNC_PROLOGUE_MAGIC_BYTES: [u8; 8] = [0xf3, 0x0f, 0x1e, 0xfa, 0x55, 0x48, 0x89, 0xe5];
 

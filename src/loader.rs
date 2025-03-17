@@ -9,6 +9,7 @@ use object::{Object, ObjectSection};
 use typed_arena::Arena;
 
 use crate::unwinder::{UnwindFrame, Unwinder};
+use crate::utils::WORD_SIZE;
 
 pub struct Loader {
     arena_data: Arena<Vec<u8>>,
@@ -68,9 +69,14 @@ impl Loader {
             bases = bases.set_got(section.address());
         }
 
+        let parsed_eh_hdr_frame = match object.section_by_name(gimli::SectionId::EhFrameHdr.name()) {
+            Some(_) => Some(gimli::EhFrameHdr::load(load_section)?.parse(&bases, WORD_SIZE as u8)?),
+            None => None,
+        };
+
         let unwind_frame = match object.section_by_name(gimli::SectionId::DebugFrame.name()) {
             Some(_) => UnwindFrame::DebugFrame(gimli::DebugFrame::load(load_section)?),
-            None => UnwindFrame::EhFrame(gimli::EhFrame::load(load_section)?),
+            None => UnwindFrame::EhFrame(gimli::EhFrame::load(load_section)?, parsed_eh_hdr_frame),
         };
         let unwinder = Unwinder::new(unwind_frame, bases);
 
