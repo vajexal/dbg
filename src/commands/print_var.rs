@@ -1,16 +1,16 @@
 use anyhow::Result;
 
-use crate::debugger::Debugger;
 use crate::printer::{InvalidPathError, Printer};
+use crate::session::DebugSession;
 
-pub fn print_var<R: gimli::Reader>(debugger: &Debugger<R>, name: Option<String>) -> Result<()> {
-    let printer = Printer::new(debugger);
+pub fn print_var<R: gimli::Reader>(session: &DebugSession<R>, name: Option<String>) -> Result<()> {
+    let printer = Printer::new(session);
 
     match name {
         Some(name) => {
             let path: Vec<&str> = name.split('.').collect();
 
-            let var = match debugger.get_var(path[0])? {
+            let var = match session.get_var(path[0])? {
                 Some(var) => var,
                 None => {
                     println!("{} not found", name);
@@ -26,7 +26,7 @@ pub fn print_var<R: gimli::Reader>(debugger: &Debugger<R>, name: Option<String>)
             }
         }
         None => {
-            for var in debugger.get_vars()?.iter() {
+            for var in session.get_vars()?.iter() {
                 printer.print(var, &[])?;
             }
         }

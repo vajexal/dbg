@@ -4,7 +4,7 @@ use anyhow::{bail, Result};
 use bytes::{Buf, Bytes};
 use thiserror::Error;
 
-use crate::debugger::Debugger;
+use crate::session::DebugSession;
 use crate::var::{Field, Type, TypeId, Var};
 
 #[derive(Error, Debug)]
@@ -12,12 +12,12 @@ use crate::var::{Field, Type, TypeId, Var};
 pub struct InvalidPathError;
 
 pub struct Printer<'a, R: gimli::Reader> {
-    debugger: &'a Debugger<R>,
+    session: &'a DebugSession<R>,
 }
 
 impl<'a, R: gimli::Reader> Printer<'a, R> {
-    pub fn new(debugger: &'a Debugger<R>) -> Self {
-        Self { debugger }
+    pub fn new(session: &'a DebugSession<R>) -> Self {
+        Self { session }
     }
 
     pub fn print(&self, var: &Var<R>, path: &[&str]) -> Result<()> {
@@ -35,7 +35,7 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
     }
 
     fn print_type(&self, f: &mut impl io::Write, type_id: TypeId, path: &[&str]) -> Result<()> {
-        match self.debugger.get_type(type_id) {
+        match self.session.get_type(type_id) {
             Type::Void => {
                 if !path.is_empty() {
                     bail!(InvalidPathError);
@@ -84,13 +84,13 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
     }
 
     fn print_value(&self, f: &mut impl io::Write, var: &Var<R>, path: &[&str]) -> Result<()> {
-        let size = self.debugger.get_type_size(var.type_id)?;
-        let buf = self.debugger.read_location(&var.location, size)?;
+        let size = self.session.get_type_size(var.type_id)?;
+        let buf = self.session.read_location(&var.location, size)?;
         self.print_bytes(f, buf, var.type_id, path)
     }
 
     fn print_bytes(&self, f: &mut impl io::Write, mut buf: Bytes, type_id: TypeId, path: &[&str]) -> Result<()> {
-        let typ = self.debugger.get_type(type_id);
+        let typ = self.session.get_type(type_id);
 
         match typ {
             Type::Void => bail!(InvalidPathError),
@@ -157,8 +157,8 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                 if path.is_empty() {
                     write!(f, "&")?;
                 }
-                let size = self.debugger.get_type_size(*subtype_id)?;
-                let buf = self.debugger.read_address(ptr, size)?;
+                let size = self.session.get_type_size(*subtype_id)?;
+                let buf = self.session.read_address(ptr, size)?;
                 self.print_bytes(f, buf, *subtype_id, path)?;
             }
             Type::Struct { fields, .. } => {
@@ -195,11 +195,11 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
     }
 
     fn unwind_type(&self, type_id: TypeId) -> &Type {
-        let mut typ = self.debugger.get_type(type_id);
+        let mut typ = self.session.get_type(type_id);
         loop {
             typ = match typ {
-                Type::Const(subtype_id) => self.debugger.get_type(*subtype_id),
-                Type::Typedef(_, subtype_id) => self.debugger.get_type(*subtype_id),
+                Type::Const(subtype_id) => self.session.get_type(*subtype_id),
+                Type::Typedef(_, subtype_id) => self.session.get_type(*subtype_id),
                 _ => break,
             }
         }
@@ -212,7 +212,7 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
             bail!(InvalidPathError);
         }
 
-        let s = self.debugger.read_c_string_at(ptr)?;
+        let s = self.session.read_c_string_at(ptr)?;
         write!(f, "{:?}", s)?;
 
         Ok(())

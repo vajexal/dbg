@@ -3,49 +3,48 @@ use clap::Parser;
 use clap::Subcommand;
 
 use crate::commands;
-use crate::debugger::Debugger;
-use crate::debugger::DebuggerState;
+use crate::session::{DebugSession, SessionState};
 
 pub struct FSM<'a, R: gimli::Reader> {
-    debugger: &'a mut Debugger<R>,
+    session: &'a mut DebugSession<R>,
 }
 
 impl<'a, R: gimli::Reader> FSM<'a, R> {
-    pub fn new(debugger: &'a mut Debugger<R>) -> Self {
-        Self { debugger }
+    pub fn new(debugger: &'a mut DebugSession<R>) -> Self {
+        Self { session: debugger }
     }
 
     pub fn handle(&mut self, command: Commands) -> Result<bool> {
         let should_quit = command == Commands::Quit;
 
-        match self.debugger.get_state() {
-            DebuggerState::Started => match command {
-                Commands::Run => commands::control::run(self.debugger)?,
-                Commands::AddBreakpoint { loc } => commands::breakpoints::add(self.debugger, loc)?,
-                Commands::RemoveBreakpoint { loc } => commands::breakpoints::remove(self.debugger, &loc)?,
-                Commands::ListBreakpoints => commands::breakpoints::list(self.debugger)?,
-                Commands::EnableBreakpoint { loc } => commands::breakpoints::enable(self.debugger, &loc)?,
-                Commands::DisableBreakpoint { loc } => commands::breakpoints::disable(self.debugger, &loc)?,
-                Commands::ClearBreakpoints => commands::breakpoints::clear(self.debugger)?,
-                Commands::Quit => commands::control::stop(self.debugger)?,
+        match self.session.get_state() {
+            SessionState::Started => match command {
+                Commands::Run => commands::control::run(self.session)?,
+                Commands::AddBreakpoint { loc } => commands::breakpoints::add(self.session, loc)?,
+                Commands::RemoveBreakpoint { loc } => commands::breakpoints::remove(self.session, &loc)?,
+                Commands::ListBreakpoints => commands::breakpoints::list(self.session)?,
+                Commands::EnableBreakpoint { loc } => commands::breakpoints::enable(self.session, &loc)?,
+                Commands::DisableBreakpoint { loc } => commands::breakpoints::disable(self.session, &loc)?,
+                Commands::ClearBreakpoints => commands::breakpoints::clear(self.session)?,
+                Commands::Quit => commands::control::stop(self.session)?,
                 _ => println!("invalid command"),
             },
-            DebuggerState::Running => match command {
-                Commands::Stop | Commands::Quit => commands::control::stop(self.debugger)?,
-                Commands::AddBreakpoint { loc } => commands::breakpoints::add(self.debugger, loc)?,
-                Commands::RemoveBreakpoint { loc } => commands::breakpoints::remove(self.debugger, &loc)?,
-                Commands::ListBreakpoints => commands::breakpoints::list(self.debugger)?,
-                Commands::EnableBreakpoint { loc } => commands::breakpoints::enable(self.debugger, &loc)?,
-                Commands::DisableBreakpoint { loc } => commands::breakpoints::disable(self.debugger, &loc)?,
-                Commands::ClearBreakpoints => commands::breakpoints::clear(self.debugger)?,
-                Commands::Continue => commands::control::cont(self.debugger)?,
-                Commands::Step => commands::control::step(self.debugger)?,
-                Commands::StepIn => commands::control::step_in(self.debugger)?,
-                Commands::StepOut => commands::control::step_out(self.debugger)?,
-                Commands::PrintVar { name } => commands::print_var::print_var(self.debugger, name)?,
+            SessionState::Running => match command {
+                Commands::Stop | Commands::Quit => commands::control::stop(self.session)?,
+                Commands::AddBreakpoint { loc } => commands::breakpoints::add(self.session, loc)?,
+                Commands::RemoveBreakpoint { loc } => commands::breakpoints::remove(self.session, &loc)?,
+                Commands::ListBreakpoints => commands::breakpoints::list(self.session)?,
+                Commands::EnableBreakpoint { loc } => commands::breakpoints::enable(self.session, &loc)?,
+                Commands::DisableBreakpoint { loc } => commands::breakpoints::disable(self.session, &loc)?,
+                Commands::ClearBreakpoints => commands::breakpoints::clear(self.session)?,
+                Commands::Continue => commands::control::cont(self.session)?,
+                Commands::Step => commands::control::step(self.session)?,
+                Commands::StepIn => commands::control::step_in(self.session)?,
+                Commands::StepOut => commands::control::step_out(self.session)?,
+                Commands::PrintVar { name } => commands::print_var::print_var(self.session, name)?,
                 _ => println!("invalid command"),
             },
-            DebuggerState::Exited => match command {
+            SessionState::Exited => match command {
                 Commands::Quit => (),
                 _ => println!("invalid command"),
             },
@@ -57,7 +56,7 @@ impl<'a, R: gimli::Reader> FSM<'a, R> {
 
 #[derive(Debug, Parser)]
 #[command(multicall = true)]
-pub struct Cli {
+pub struct CommandParser {
     #[command(subcommand)]
     pub command: Commands,
 }

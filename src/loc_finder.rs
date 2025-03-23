@@ -99,7 +99,7 @@ impl<R: gimli::Reader> LocFinder<R> {
 
             match entry.tag() {
                 gimli::DW_TAG_subprogram => self.process_subprogram(unit_ref, entry, &mut visited_types)?,
-                gimli::DW_TAG_formal_parameter | gimli::DW_TAG_variable => self.process_var(unit_ref, entry, None, &mut visited_types)?,
+                gimli::DW_TAG_variable => self.process_var(unit_ref, entry, None, &mut visited_types)?,
                 _ => (),
             }
         }
@@ -173,7 +173,11 @@ impl<R: gimli::Reader> LocFinder<R> {
         let root = tree.root()?;
         let mut children = root.children();
         while let Some(child) = children.next()? {
-            self.process_var(unit_ref, child.entry(), Some(name.clone()), visited_types)?;
+            let child_entry = child.entry();
+            match child_entry.tag() {
+                gimli::DW_TAG_formal_parameter | gimli::DW_TAG_variable => self.process_var(unit_ref, child_entry, Some(name.clone()), visited_types)?,
+                _ => (),
+            }
         }
 
         Ok(())

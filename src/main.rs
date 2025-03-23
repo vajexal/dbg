@@ -1,18 +1,19 @@
+mod breakpoint;
 mod commands;
 mod debugger;
 mod error;
 mod fsm;
-mod loader;
 mod loc_finder;
 mod printer;
+mod session;
+mod trap;
 mod unwinder;
 mod utils;
 mod var;
 
 use std::{io::Write, path::Path};
 
-use fsm::{Cli, FSM};
-use loader::Loader;
+use fsm::{CommandParser, FSM};
 
 use anyhow::{bail, Result};
 use clap::Parser;
@@ -28,10 +29,9 @@ fn main() -> Result<()> {
 
     let prog_path = Path::new(&args[0]);
 
-    let loader = Loader::new();
-    let (dwarf, unwinder, object_kind) = loader.load(prog_path)?;
-    let mut debugger = Debugger::start(prog_path, &args[1..], dwarf, unwinder, object_kind)?;
-    let mut fsm = FSM::new(&mut debugger);
+    let debugger = Debugger::new();
+    let mut session = debugger.start(prog_path, &args[1..])?;
+    let mut fsm = FSM::new(&mut session);
 
     loop {
         let line = readline()?;
@@ -47,7 +47,7 @@ fn main() -> Result<()> {
                 continue;
             }
         };
-        let cli = match Cli::try_parse_from(args) {
+        let parser = match CommandParser::try_parse_from(args) {
             Ok(cli) => cli,
             Err(e) => {
                 eprintln!("parse comamnd {e}");
@@ -55,7 +55,7 @@ fn main() -> Result<()> {
             }
         };
 
-        if fsm.handle(cli.command)? {
+        if fsm.handle(parser.command)? {
             break;
         }
     }
