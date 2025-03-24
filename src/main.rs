@@ -23,7 +23,7 @@ fn main() -> Result<()> {
     env_logger::init();
 
     let args = std::env::args().skip(1).collect::<Vec<_>>();
-    if args.len() == 0 {
+    if args.is_empty() {
         bail!("pass program");
     }
 

@@ -37,6 +37,7 @@ impl<Offset: gimli::ReaderOffset> VarRef<Offset> {
 
 const VOID_TYPE_ID: TypeId = 0;
 
+#[allow(clippy::type_complexity)]
 #[derive(Debug)]
 pub struct LocFinder<R: gimli::Reader> {
     // todo string table
@@ -89,7 +90,7 @@ impl<R: gimli::Reader> LocFinder<R> {
         let root = tree.root()?;
         let root_entry = root.entry();
         if root_entry.tag() == gimli::DW_TAG_compile_unit {
-            self.process_compile_unit(unit_ref, &root_entry)?;
+            self.process_compile_unit(unit_ref, root_entry)?;
         }
 
         let mut visited_types = HashMap::new();
@@ -359,7 +360,7 @@ impl<R: gimli::Reader> LocFinder<R> {
         let mut rows = program.rows();
 
         while let Some((header, row)) = rows.next_row()? {
-            let file = match row.file(&header) {
+            let file = match row.file(header) {
                 Some(file) => file,
                 None => bail!("get path"),
             };
@@ -367,7 +368,7 @@ impl<R: gimli::Reader> LocFinder<R> {
             // build file path
             let mut path = PathBuf::new();
             if file.directory_index() != 0 {
-                let dir = file.directory(&header).ok_or(anyhow!("get directory"))?;
+                let dir = file.directory(header).ok_or(anyhow!("get directory"))?;
                 path.push(unit_ref.attr_string(dir)?.to_string()?.as_ref());
             }
             path.push(unit_ref.attr_string(file.path_name())?.to_string()?.as_ref());
@@ -408,24 +409,8 @@ impl<R: gimli::Reader> LocFinder<R> {
     }
 
     pub fn find_next_line_address(&self, fileline: &str) -> Option<u64> {
-        let (filepath, line) = match Self::parse_fileline(fileline) {
-            Some((filepath, line)) => (filepath, line as usize),
-            None => return None,
-        };
-
-        let lines = match self.lines.get(filepath) {
-            Some(lines) => lines,
-            None => return None,
-        };
-
-        for line in (line + 1)..lines.len() {
-            let address = lines[line];
-            if address != 0 {
-                return Some(address);
-            }
-        }
-
-        None
+        let (filepath, line) = Self::parse_fileline(fileline)?;
+        self.lines.get(filepath)?.iter().skip(line as usize + 1).find(|&&address| address != 0).copied()
     }
 
     pub fn find_func(&self, func_name: &str) -> Option<EntryRef<R::Offset>> {

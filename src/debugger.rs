@@ -61,7 +61,7 @@ impl Debugger {
         let dwarf = gimli::Dwarf::load(load_section)?;
         let unwinder = Self::get_unwinder(&object, load_section)?;
 
-        let mut command = process::Command::new(&prog);
+        let mut command = process::Command::new(prog);
 
         unsafe {
             command.pre_exec(|| {
@@ -120,7 +120,7 @@ impl Debugger {
     fn get_base_address(child_pid: u32) -> Result<u64> {
         let mut buf = vec![0; 16];
         let mut procmaps = fs::File::open(format!("/proc/{}/maps", child_pid))?;
-        procmaps.read(&mut buf)?;
+        _ = procmaps.read(&mut buf)?;
         let (base_address, _) = std::str::from_utf8(&buf)?.split_once('-').ok_or(anyhow!("invalid proc maps"))?;
         let base_address = u64::from_str_radix(base_address, 16)?;
 

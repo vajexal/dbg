@@ -52,7 +52,7 @@ impl<T: PartialOrd> AVLTree<T> {
 
         if balance_factor > 1 {
             // left heavy
-            if Self::balance_factor(&node.left.as_ref().unwrap()) < 0 {
+            if Self::balance_factor(node.left.as_ref().unwrap()) < 0 {
                 // left-right case, need to rotate left then right
                 node.left = Some(Self::rotate_left(node.left.take().unwrap()));
             }
@@ -61,7 +61,7 @@ impl<T: PartialOrd> AVLTree<T> {
 
         if balance_factor < -1 {
             // right heavy
-            if Self::balance_factor(&node.right.as_ref().unwrap()) > 0 {
+            if Self::balance_factor(node.right.as_ref().unwrap()) > 0 {
                 // right-left case, need to rotate right then left
                 node.right = Some(Self::rotate_right(node.right.take().unwrap()));
             }
@@ -89,7 +89,7 @@ impl<T: PartialOrd> AVLTree<T> {
         new_root
     }
 
-    fn balance_factor(node: &Box<Node<T>>) -> i32 {
+    fn balance_factor(node: &Node<T>) -> i32 {
         Self::height(&node.left) - Self::height(&node.right)
     }
 
@@ -101,7 +101,7 @@ impl<T: PartialOrd> AVLTree<T> {
     pub fn iter(&self) -> AVLTreeIterator<T> {
         AVLTreeIterator {
             stack: Vec::new(),
-            current_node: self.root.as_ref(),
+            current_node: self.root.as_deref(),
         }
     }
 
@@ -128,8 +128,8 @@ impl<T: PartialOrd> AVLTree<T> {
 }
 
 pub struct AVLTreeIterator<'a, T> {
-    stack: Vec<&'a Box<Node<T>>>,           // stack to simulate the recursion
-    current_node: Option<&'a Box<Node<T>>>, // the current node we're visiting
+    stack: Vec<&'a Node<T>>,           // stack to simulate the recursion
+    current_node: Option<&'a Node<T>>, // the current node we're visiting
 }
 
 impl<'a, T> Iterator for AVLTreeIterator<'a, T> {
@@ -139,13 +139,13 @@ impl<'a, T> Iterator for AVLTreeIterator<'a, T> {
         // traverse the leftmost path first
         while let Some(node) = self.current_node {
             self.stack.push(node);
-            self.current_node = node.left.as_ref();
+            self.current_node = node.left.as_deref();
         }
 
         // if stack is empty, there's no more nodes to visit
         if let Some(node) = self.stack.pop() {
             // now, we are visiting a node, so we need to check the right side
-            self.current_node = node.right.as_ref();
+            self.current_node = node.right.as_deref();
             return Some(&node.value);
         }
 
@@ -279,7 +279,7 @@ mod tests {
             tree.insert(i);
         }
 
-        let result: Vec<_> = tree.iter().map(|&i| i).collect();
+        let result: Vec<_> = tree.iter().copied().collect();
         let expected: Vec<_> = (1..=1000).collect();
 
         assert_eq!(result, expected);

@@ -5,6 +5,7 @@ use clap::Subcommand;
 use crate::commands;
 use crate::session::{DebugSession, SessionState};
 
+#[allow(clippy::upper_case_acronyms)]
 pub struct FSM<'a, R: gimli::Reader> {
     session: &'a mut DebugSession<R>,
 }

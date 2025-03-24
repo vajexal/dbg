@@ -177,7 +177,7 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
         Ok(())
     }
 
-    fn print_struct_bytes(&self, f: &mut impl io::Write, buf: Bytes, fields: &Vec<Field>) -> Result<()> {
+    fn print_struct_bytes(&self, f: &mut impl io::Write, buf: Bytes, fields: &[Field]) -> Result<()> {
         write!(f, "{{ ")?;
 
         for (i, field) in fields.iter().enumerate() {
