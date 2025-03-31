@@ -2,14 +2,10 @@ use std::io::{self, Write};
 
 use anyhow::{bail, Result};
 use bytes::{Buf, Bytes};
-use thiserror::Error;
 
+use crate::error::DebuggerError;
 use crate::session::DebugSession;
 use crate::var::{Field, Type, TypeId, Var};
-
-#[derive(Error, Debug)]
-#[error("invalid path")]
-pub struct InvalidPathError;
 
 pub struct Printer<'a, R: gimli::Reader> {
     session: &'a DebugSession<R>,
@@ -38,13 +34,13 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
         match self.session.get_type(type_id) {
             Type::Void => {
                 if !path.is_empty() {
-                    bail!(InvalidPathError);
+                    bail!(DebuggerError::InvalidPath);
                 }
                 write!(f, "void")?;
             }
             Type::Base { name, encoding, .. } => {
                 if !path.is_empty() {
-                    bail!(InvalidPathError);
+                    bail!(DebuggerError::InvalidPath);
                 }
                 match *encoding {
                     gimli::DW_ATE_boolean => write!(f, "bool")?,
@@ -67,7 +63,7 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                 } else {
                     match fields.iter().find(|field| field.name.as_ref() == path[0]) {
                         Some(field) => self.print_type(f, field.type_id, &path[1..])?,
-                        None => bail!(InvalidPathError),
+                        None => bail!(DebuggerError::InvalidPath),
                     }
                 }
             }
@@ -93,10 +89,10 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
         let typ = self.session.get_type(type_id);
 
         match typ {
-            Type::Void => bail!(InvalidPathError),
+            Type::Void => bail!(DebuggerError::InvalidPath),
             Type::Base { encoding, size, .. } => {
                 if !path.is_empty() {
-                    bail!(InvalidPathError);
+                    bail!(DebuggerError::InvalidPath);
                 }
 
                 match *encoding {
@@ -129,7 +125,7 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                 // is it null?
                 if ptr == 0 {
                     if !path.is_empty() {
-                        bail!(InvalidPathError);
+                        bail!(DebuggerError::InvalidPath);
                     }
                     return Ok(write!(f, "null")?);
                 }
@@ -139,7 +135,7 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                 if let Type::Base { encoding, .. } = subtype {
                     if *encoding == gimli::DW_ATE_signed_char {
                         if !path.is_empty() {
-                            bail!(InvalidPathError);
+                            bail!(DebuggerError::InvalidPath);
                         }
                         return self.print_c_string(f, ptr, path);
                     }
@@ -148,7 +144,7 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                 // is it void* ?
                 if let Type::Void = subtype {
                     if !path.is_empty() {
-                        bail!(InvalidPathError);
+                        bail!(DebuggerError::InvalidPath);
                     }
                     write!(f, "{:#x}", ptr)?;
                     return Ok(());
@@ -167,7 +163,7 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                 } else {
                     match fields.iter().find(|field| field.name.as_ref() == path[0]) {
                         Some(field) => self.print_bytes(f, buf.slice((field.offset as usize)..), field.type_id, &path[1..])?,
-                        None => bail!(InvalidPathError),
+                        None => bail!(DebuggerError::InvalidPath),
                     }
                 }
             }
@@ -209,7 +205,7 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
 
     fn print_c_string(&self, f: &mut impl io::Write, ptr: u64, path: &[&str]) -> Result<()> {
         if !path.is_empty() {
-            bail!(InvalidPathError);
+            bail!(DebuggerError::InvalidPath);
         }
 
         let s = self.session.read_c_string_at(ptr)?;

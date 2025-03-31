@@ -8,4 +8,8 @@ pub enum DebuggerError {
     BreakpointAlreadyExist,
     #[error("loc not found")]
     LocNotFound,
+    #[error("{0} not found")]
+    VarNotFound(String),
+    #[error("invalid path")]
+    InvalidPath,
 }

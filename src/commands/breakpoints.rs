@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 
-use crate::error::DebuggerError;
 use crate::session::DebugSession;
 use anyhow::Result;
 
@@ -9,25 +8,15 @@ where
     R: gimli::Reader,
     S: Into<Cow<'a, str>>,
 {
-    match session.add_breakpoint(loc) {
-        Ok(_) => println!("breakpoint set"),
-        Err(e) => match e.downcast_ref::<DebuggerError>() {
-            Some(_) => println!("{}", e),
-            None => return Err(e),
-        },
-    };
+    session.add_breakpoint(loc)?;
+    println!("breakpoint set");
 
     Ok(())
 }
 
 pub fn remove<R: gimli::Reader>(session: &mut DebugSession<R>, loc: &str) -> Result<()> {
-    match session.remove_breakpoint(loc) {
-        Ok(_) => println!("breakpoint removed"),
-        Err(e) => match e.downcast_ref::<DebuggerError>() {
-            Some(_) => println!("{}", e),
-            None => return Err(e),
-        },
-    };
+    session.remove_breakpoint(loc)?;
+    println!("breakpoint removed");
 
     Ok(())
 }
@@ -48,25 +37,15 @@ pub fn list<R: gimli::Reader>(session: &DebugSession<R>) -> Result<()> {
 }
 
 pub fn enable<R: gimli::Reader>(session: &DebugSession<R>, loc: &str) -> Result<()> {
-    match session.enable_breakpoint(loc) {
-        Ok(_) => println!("breakpoint enabled"),
-        Err(e) => match e.downcast_ref::<DebuggerError>() {
-            Some(_) => println!("{}", e),
-            None => return Err(e),
-        },
-    };
+    session.enable_breakpoint(loc)?;
+    println!("breakpoint enabled");
 
     Ok(())
 }
 
 pub fn disable<R: gimli::Reader>(session: &DebugSession<R>, loc: &str) -> Result<()> {
-    match session.disable_breakpoint(loc) {
-        Ok(_) => println!("breakpoint disabled"),
-        Err(e) => match e.downcast_ref::<DebuggerError>() {
-            Some(_) => println!("{}", e),
-            None => return Err(e),
-        },
-    };
+    session.disable_breakpoint(loc)?;
+    println!("breakpoint disabled");
 
     Ok(())
 }

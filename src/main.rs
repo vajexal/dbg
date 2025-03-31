@@ -13,6 +13,7 @@ mod var;
 
 use std::{io::Write, path::Path};
 
+use error::DebuggerError;
 use fsm::{CommandParser, FSM};
 
 use anyhow::{bail, Result};
@@ -55,9 +56,17 @@ fn main() -> Result<()> {
             }
         };
 
-        if fsm.handle(parser.command)? {
-            break;
-        }
+        match fsm.handle(parser.command) {
+            Ok(should_quit) => {
+                if should_quit {
+                    break;
+                }
+            }
+            Err(e) => match e.downcast_ref::<DebuggerError>() {
+                Some(_) => eprintln!("{}", e),
+                None => return Err(e),
+            },
+        };
     }
 
     Ok(())

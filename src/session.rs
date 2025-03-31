@@ -420,16 +420,16 @@ impl<R: gimli::Reader> DebugSession<R> {
         Ok(vars)
     }
 
-    pub fn get_var(&self, name: &str) -> Result<Option<Var<R>>> {
+    pub fn get_var(&self, name: &str) -> Result<Var<R>> {
         let ip = self.get_ip()?;
         let current_func = self.loc_finder.find_func_by_address(ip).ok_or(anyhow!("get current func"))?;
         let var_ref = match self.loc_finder.get_var(name, Some(current_func.as_ref())) {
             Some(var_ref) => var_ref,
-            None => return Ok(None),
+            None => bail!(DebuggerError::VarNotFound(String::from(name))),
         };
         let var = self.get_var_by_entry_ref(name, current_func.as_ref(), var_ref)?;
 
-        Ok(Some(var))
+        Ok(var)
     }
 
     fn get_var_by_entry_ref(&self, name: &str, func: &str, var_ref: VarRef<R::Offset>) -> Result<Var<R>> {
