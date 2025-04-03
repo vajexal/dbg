@@ -9,12 +9,12 @@ pub fn print_var<R: gimli::Reader>(session: &DebugSession<R>, name: Option<Strin
     match name {
         Some(name) => {
             let path: Vec<&str> = name.split('.').collect();
-            let var = session.get_var(path[0])?;
-            printer.print(&var, &path[1..])?;
+            let var = session.get_var(&path)?;
+            printer.print(&var)?;
         }
         None => {
             for var in session.get_vars()?.iter() {
-                printer.print(var, &[])?;
+                printer.print(var)?;
             }
         }
     };

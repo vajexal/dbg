@@ -13,7 +13,7 @@ use crate::loc_finder::{LocFinder, VarRef};
 use crate::trap::Trap;
 use crate::unwinder::Unwinder;
 use crate::utils::WORD_SIZE;
-use crate::var::{Type, TypeId, Var};
+use crate::var::{Type, TypeId, Value, Var};
 
 use anyhow::{anyhow, bail, Result};
 use bytes::{Buf, BufMut, Bytes};
@@ -407,32 +407,34 @@ impl<R: gimli::Reader> DebugSession<R> {
         Ok(())
     }
 
-    pub fn get_vars(&self) -> Result<Vec<Var<R>>> {
+    pub fn get_vars(&self) -> Result<Vec<Var>> {
         let ip = self.get_ip()?;
         let current_func = self.loc_finder.find_func_by_address(ip).ok_or(anyhow!("get current func"))?;
         let mut vars = Vec::new();
 
         for (name, &var_ref) in self.loc_finder.get_vars(Some(current_func.as_ref())).iter() {
-            let var = self.get_var_by_entry_ref(name, current_func.as_ref(), var_ref)?;
+            let var = self.get_var_by_var_ref(name, current_func.as_ref(), var_ref)?;
             vars.push(var);
         }
 
         Ok(vars)
     }
 
-    pub fn get_var(&self, name: &str) -> Result<Var<R>> {
+    pub fn get_var(&self, path: &[&str]) -> Result<Var> {
+        let (&name, path) = path.split_first().ok_or(DebuggerError::InvalidPath)?;
         let ip = self.get_ip()?;
         let current_func = self.loc_finder.find_func_by_address(ip).ok_or(anyhow!("get current func"))?;
         let var_ref = match self.loc_finder.get_var(name, Some(current_func.as_ref())) {
             Some(var_ref) => var_ref,
             None => bail!(DebuggerError::VarNotFound(String::from(name))),
         };
-        let var = self.get_var_by_entry_ref(name, current_func.as_ref(), var_ref)?;
+        let value = self.get_value_by_var_ref(current_func.as_ref(), var_ref)?;
+        let value = self.unwind_value(value, path)?;
 
-        Ok(var)
+        Ok(Var::new(path.last().copied().unwrap_or(name), value))
     }
 
-    fn get_var_by_entry_ref(&self, name: &str, func: &str, var_ref: VarRef<R::Offset>) -> Result<Var<R>> {
+    fn get_value_by_var_ref(&self, func: &str, var_ref: VarRef<R::Offset>) -> Result<Value> {
         let unit_header = self.dwarf.debug_info.header_from_offset(var_ref.entry_ref.unit_offset)?;
         let unit = self.dwarf.unit(unit_header)?;
         let entry = unit.entry(var_ref.entry_ref.entry_offset)?;
@@ -445,12 +447,44 @@ impl<R: gimli::Reader> DebugSession<R> {
         if !(pieces.len() == 1 && pieces[0].size_in_bits.is_none()) {
             bail!("can't read composite location");
         }
+        let location = pieces.remove(0).location;
 
-        Ok(Var {
-            type_id: var_ref.type_id,
-            name: name.to_string(),
-            location: pieces.remove(0).location,
-        })
+        let size = self.get_type_size(var_ref.type_id)?;
+        let buf = self.read_location(&location, size)?;
+
+        Ok(Value::new(var_ref.type_id, buf))
+    }
+
+    fn get_var_by_var_ref(&self, name: &str, func: &str, var_ref: VarRef<R::Offset>) -> Result<Var> {
+        let value = self.get_value_by_var_ref(func, var_ref)?;
+
+        Ok(Var::new(name, value))
+    }
+
+    fn unwind_value(&self, mut value: Value, path: &[&str]) -> Result<Value> {
+        if path.is_empty() {
+            return Ok(value);
+        }
+
+        match self.get_type(value.type_id) {
+            Type::Const(subtype_id) | Type::Typedef(_, subtype_id) => self.unwind_value(Value::new(*subtype_id, value.buf), path),
+            Type::Pointer(subtype_id) => {
+                let ptr = value.buf.get_u64_ne();
+                if ptr == 0 {
+                    bail!(DebuggerError::InvalidPath);
+                }
+
+                let size = self.get_type_size(*subtype_id)?;
+                let buf = self.read_address(ptr, size)?;
+
+                self.unwind_value(Value::new(*subtype_id, buf), path)
+            }
+            Type::Struct { fields, .. } => match fields.iter().find(|&field| field.name.as_ref() == path[0]) {
+                Some(field) => self.unwind_value(Value::new(field.type_id, value.buf.slice((field.offset as usize)..)), &path[1..]),
+                None => bail!(DebuggerError::InvalidPath),
+            },
+            _ => bail!(DebuggerError::InvalidPath),
+        }
     }
 
     pub fn get_type(&self, type_id: TypeId) -> &Type {
