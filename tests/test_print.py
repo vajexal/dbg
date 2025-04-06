@@ -57,6 +57,37 @@ int main()
         ]
     )
 
+def test_print_nested_struct(debugger):
+    debugger(
+        code="""#include <stdio.h>
+
+struct Foo {
+    int a;
+    struct Bar {
+        int b;
+    } bar;
+};
+
+int main()
+{
+    struct Foo foo = {10, {20}};
+
+    printf("%d, %d\\n", foo.a, foo.bar.b);
+
+    return 0;
+}
+""",
+        steps=[
+            Step("b 14", "breakpoint set"),
+            Step("r"),
+            Step("p foo.a", "int a = 10"),
+            Step("p foo.bar.b", "int b = 20"),
+            Step("p foo", "Foo foo = { a = 10, bar = { b = 20 } }"),
+            Step("c"),
+            Step("q"),
+        ]
+    )
+
 
 def test_print_node(debugger):
     debugger(
