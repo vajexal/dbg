@@ -12,4 +12,6 @@ pub enum DebuggerError {
     VarNotFound(String),
     #[error("invalid path")]
     InvalidPath,
+    #[error("invalid value")]
+    InvalidValue,
 }

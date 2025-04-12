@@ -42,7 +42,8 @@ impl<'a, R: gimli::Reader> FSM<'a, R> {
                 Commands::Step => commands::control::step(self.session)?,
                 Commands::StepIn => commands::control::step_in(self.session)?,
                 Commands::StepOut => commands::control::step_out(self.session)?,
-                Commands::PrintVar { name } => commands::print_var::print_var(self.session, name)?,
+                Commands::PrintVar { name } => commands::var::print_var(self.session, name)?,
+                Commands::SetVar { name, value } => commands::var::set_var(self.session, name, value)?,
                 _ => println!("invalid command"),
             },
             SessionState::Exited => match command {
@@ -95,6 +96,11 @@ pub enum Commands {
     #[command(name = "print", visible_alias = "p")]
     PrintVar {
         name: Option<String>,
+    },
+    #[command(name = "set")]
+    SetVar {
+        name: String,
+        value: String,
     },
     #[command(visible_alias = "q")]
     Quit,

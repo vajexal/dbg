@@ -98,7 +98,7 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                 }
 
                 // is it c-string?
-                let subtype = self.unwind_type(*subtype_id);
+                let subtype = self.session.unwind_type(*subtype_id);
                 if let Type::Base { encoding, .. } = subtype {
                     if *encoding == gimli::DW_ATE_signed_char {
                         let s = self.session.read_c_string_at(ptr)?;
@@ -135,18 +135,5 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
         };
 
         Ok(())
-    }
-
-    fn unwind_type(&self, type_id: TypeId) -> &Type {
-        let mut typ = self.session.get_type(type_id);
-        loop {
-            typ = match typ {
-                Type::Const(subtype_id) => self.session.get_type(*subtype_id),
-                Type::Typedef(_, subtype_id) => self.session.get_type(*subtype_id),
-                _ => break,
-            }
-        }
-
-        typ
     }
 }

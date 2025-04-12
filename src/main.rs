@@ -4,6 +4,7 @@ mod debugger;
 mod error;
 mod fsm;
 mod loc_finder;
+mod location;
 mod printer;
 mod session;
 mod trap;

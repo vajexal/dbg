@@ -3,20 +3,21 @@ use std::cell::{Cell, RefCell};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fs;
-use std::io::{self, Read, Seek};
+use std::io::{self, Read, Seek, Write};
 use std::process;
 use std::rc::Rc;
 
 use crate::breakpoint::Breakpoint;
 use crate::error::DebuggerError;
 use crate::loc_finder::{LocFinder, VarRef};
+use crate::location::{TypedValueLoc, ValueLoc};
 use crate::trap::Trap;
 use crate::unwinder::Unwinder;
 use crate::utils::WORD_SIZE;
 use crate::var::{Type, TypeId, Value, Var};
 
 use anyhow::{anyhow, bail, Result};
-use bytes::{Buf, BufMut, Bytes};
+use bytes::{Buf, Bytes};
 use nix::sys::{ptrace, wait};
 use nix::unistd::Pid;
 
@@ -413,28 +414,37 @@ impl<R: gimli::Reader> DebugSession<R> {
         let mut vars = Vec::new();
 
         for (name, &var_ref) in self.loc_finder.get_vars(Some(current_func.as_ref())).iter() {
-            let var = self.get_var_by_var_ref(name, current_func.as_ref(), var_ref)?;
-            vars.push(var);
+            let value = self.get_value_by_var_ref(current_func.as_ref(), var_ref)?;
+            vars.push(Var::new(name.clone(), value));
         }
 
         Ok(vars)
     }
 
-    pub fn get_var(&self, path: &[&str]) -> Result<Var> {
+    pub fn get_var_loc(&self, path: &[&str]) -> Result<TypedValueLoc> {
         let (&name, path) = path.split_first().ok_or(DebuggerError::InvalidPath)?;
         let ip = self.get_ip()?;
-        let current_func = self.loc_finder.find_func_by_address(ip).ok_or(anyhow!("get current func"))?;
-        let var_ref = match self.loc_finder.get_var(name, Some(current_func.as_ref())) {
+        let func = self.loc_finder.find_func_by_address(ip).ok_or(anyhow!("get current func"))?;
+        let var_ref = match self.loc_finder.get_var(name, Some(func.as_ref())) {
             Some(var_ref) => var_ref,
             None => bail!(DebuggerError::VarNotFound(String::from(name))),
         };
-        let value = self.get_value_by_var_ref(current_func.as_ref(), var_ref)?;
-        let value = self.unwind_value(value, path)?;
+        let loc = self.get_value_loc_by_var_ref(&func, var_ref)?;
+        let loc = self.unwind_loc(loc, path)?;
 
-        Ok(Var::new(path.last().copied().unwrap_or(name), value))
+        Ok(loc)
     }
 
-    fn get_value_by_var_ref(&self, func: &str, var_ref: VarRef<R::Offset>) -> Result<Value> {
+    pub fn get_var(&self, path: &[&str]) -> Result<Var> {
+        let loc = self.get_var_loc(path)?;
+        let size = self.get_type_size(loc.type_id)?;
+        let buf = self.read_value_loc(loc.location, size)?;
+        let value = Value::new(loc.type_id, buf);
+        let var = Var::new(path.last().copied().unwrap(), value);
+        Ok(var)
+    }
+
+    fn get_value_loc_by_var_ref(&self, func: &str, var_ref: VarRef<R::Offset>) -> Result<TypedValueLoc> {
         let unit_header = self.dwarf.debug_info.header_from_offset(var_ref.entry_ref.unit_offset)?;
         let unit = self.dwarf.unit(unit_header)?;
         let entry = unit.entry(var_ref.entry_ref.entry_offset)?;
@@ -449,38 +459,34 @@ impl<R: gimli::Reader> DebugSession<R> {
         }
         let location = pieces.remove(0).location;
 
-        let size = self.get_type_size(var_ref.type_id)?;
-        let buf = self.read_location(&location, size)?;
-
-        Ok(Value::new(var_ref.type_id, buf))
+        Ok(TypedValueLoc::new(location.into(), var_ref.type_id))
     }
 
-    fn get_var_by_var_ref(&self, name: &str, func: &str, var_ref: VarRef<R::Offset>) -> Result<Var> {
-        let value = self.get_value_by_var_ref(func, var_ref)?;
+    fn get_value_by_var_ref(&self, func: &str, var_ref: VarRef<R::Offset>) -> Result<Value> {
+        let loc = self.get_value_loc_by_var_ref(func, var_ref)?;
+        let size = self.get_type_size(loc.type_id)?;
+        let buf = self.read_value_loc(loc.location, size)?;
 
-        Ok(Var::new(name, value))
+        Ok(Value::new(loc.type_id, buf))
     }
 
-    fn unwind_value(&self, mut value: Value, path: &[&str]) -> Result<Value> {
+    fn unwind_loc(&self, loc: TypedValueLoc, path: &[&str]) -> Result<TypedValueLoc> {
         if path.is_empty() {
-            return Ok(value);
+            return Ok(loc);
         }
 
-        match self.get_type(value.type_id) {
-            Type::Const(subtype_id) | Type::Typedef(_, subtype_id) => self.unwind_value(Value::new(*subtype_id, value.buf), path),
+        match self.get_type(loc.type_id) {
+            Type::Const(subtype_id) | Type::Typedef(_, subtype_id) => self.unwind_loc(loc.with_type(*subtype_id), path),
             Type::Pointer(subtype_id) => {
-                let ptr = value.buf.get_u64_ne();
+                let ptr = self.read_value_loc(loc.location, WORD_SIZE)?.get_u64_ne();
                 if ptr == 0 {
                     bail!(DebuggerError::InvalidPath);
                 }
 
-                let size = self.get_type_size(*subtype_id)?;
-                let buf = self.read_address(ptr, size)?;
-
-                self.unwind_value(Value::new(*subtype_id, buf), path)
+                self.unwind_loc(TypedValueLoc::new(ValueLoc::Address(ptr), *subtype_id), path)
             }
             Type::Struct { fields, .. } => match fields.iter().find(|&field| field.name.as_ref() == path[0]) {
-                Some(field) => self.unwind_value(Value::new(field.type_id, value.buf.slice((field.offset as usize)..)), &path[1..]),
+                Some(field) => self.unwind_loc(TypedValueLoc::new(loc.location.with_offset(field.offset), field.type_id), &path[1..]),
                 None => bail!(DebuggerError::InvalidPath),
             },
             _ => bail!(DebuggerError::InvalidPath),
@@ -493,6 +499,14 @@ impl<R: gimli::Reader> DebugSession<R> {
 
     pub fn get_type_size(&self, type_id: TypeId) -> Result<usize> {
         self.loc_finder.get_type_size(type_id)
+    }
+
+    pub fn unwind_type(&self, type_id: TypeId) -> &Type {
+        match self.get_type(type_id) {
+            Type::Const(subtype_id) => self.unwind_type(*subtype_id),
+            Type::Typedef(_, subtype_id) => self.unwind_type(*subtype_id),
+            typ => typ,
+        }
     }
 
     fn eval_expr(&self, expr: gimli::Expression<R>, unit_ref: &gimli::UnitRef<R>, current_func: &str) -> Result<gimli::Evaluation<R>> {
@@ -548,26 +562,41 @@ impl<R: gimli::Reader> DebugSession<R> {
     }
 
     fn get_register_value(&self, register: gimli::Register) -> Result<u64> {
+        let mut regs = ptrace::getregs(self.child_pid())?;
+        let value_ref = Self::get_register_ref(&mut regs, register)?;
+
+        Ok(*value_ref)
+    }
+
+    fn set_register_value(&self, register: gimli::Register, value: u64) -> Result<()> {
+        let mut regs = ptrace::getregs(self.child_pid())?;
+        let value_ref = Self::get_register_ref(&mut regs, register)?;
+        *value_ref = value;
+        ptrace::setregs(self.child_pid(), regs)?;
+
+        Ok(())
+    }
+
+    fn get_register_ref(regs: &mut libc::user_regs_struct, register: gimli::Register) -> Result<&mut u64> {
         let register_name = gimli::X86_64::register_name(register).ok_or(anyhow!("get {} register", register.0))?;
-        let regs = ptrace::getregs(self.child_pid())?;
 
         let value = match register_name {
-            "rax" => regs.rax,
-            "rdx" => regs.rdx,
-            "rcx" => regs.rcx,
-            "rbx" => regs.rbx,
-            "rsi" => regs.rsi,
-            "rdi" => regs.rdi,
-            "rbp" => regs.rbp,
-            "rsp" => regs.rsp,
-            "r8" => regs.r8,
-            "r9" => regs.r9,
-            "r10" => regs.r10,
-            "r11" => regs.r11,
-            "r12" => regs.r12,
-            "r13" => regs.r13,
-            "r14" => regs.r14,
-            "r15" => regs.r15,
+            "rax" => &mut regs.rax,
+            "rdx" => &mut regs.rdx,
+            "rcx" => &mut regs.rcx,
+            "rbx" => &mut regs.rbx,
+            "rsi" => &mut regs.rsi,
+            "rdi" => &mut regs.rdi,
+            "rbp" => &mut regs.rbp,
+            "rsp" => &mut regs.rsp,
+            "r8" => &mut regs.r8,
+            "r9" => &mut regs.r9,
+            "r10" => &mut regs.r10,
+            "r11" => &mut regs.r11,
+            "r12" => &mut regs.r12,
+            "r13" => &mut regs.r13,
+            "r14" => &mut regs.r14,
+            "r15" => &mut regs.r15,
             _ => bail!("get {} register", register_name),
         };
 
@@ -598,32 +627,22 @@ impl<R: gimli::Reader> DebugSession<R> {
         }
     }
 
-    pub fn read_location(&self, location: &gimli::Location<R>, size: usize) -> Result<Bytes> {
-        log::trace!("read {} bytes from {:?}", size, location);
+    fn read_value_loc(&self, loc: ValueLoc, size: usize) -> Result<Bytes> {
+        log::trace!("read {} bytes from {:?}", size, loc);
 
         let mut buf = vec![0; size];
 
-        match location {
-            gimli::Location::Register { register } => {
-                if size > WORD_SIZE {
+        match loc {
+            ValueLoc::Empty => bail!("can't read loc {:?}", loc),
+            ValueLoc::Register { register, offset } => {
+                if offset as usize + size > WORD_SIZE {
                     bail!("too many bytes to read")
                 }
-                let value = self.get_register_value(*register)?;
-                buf.put_u64_ne(value);
+                let value = self.get_register_value(register)?;
+                buf.copy_from_slice(&value.to_ne_bytes()[offset as usize..offset as usize + size]);
             }
-            gimli::Location::Address { address } => {
-                self.read_memory(*address, &mut buf)?;
-            }
-            gimli::Location::Value { value } => {
-                if size > WORD_SIZE {
-                    bail!("too many bytes to read")
-                }
-                let value = value.to_u64(!0u64)?;
-                buf.put_u64_ne(value);
-            }
-            gimli::Location::Bytes { value } => buf.extend_from_slice(&value.to_slice()?),
-            _ => bail!("can't read location {:?}", location),
-        }
+            ValueLoc::Address(address) => self.read_memory(address, &mut buf)?,
+        };
 
         Ok(buf.into())
     }
@@ -642,6 +661,40 @@ impl<R: gimli::Reader> DebugSession<R> {
         let mut procmem = fs::File::open(format!("/proc/{}/mem", self.child_pid()))?;
         procmem.seek(io::SeekFrom::Start(addr))?;
         procmem.read_exact(buf.as_mut_slice())?;
+
+        Ok(())
+    }
+
+    pub fn write_location(&self, location: ValueLoc, mut value: Bytes) -> Result<()> {
+        log::trace!("write {:?} to {:?}", value, location);
+
+        match location {
+            ValueLoc::Register { register, offset } => {
+                if offset as usize + value.len() > WORD_SIZE {
+                    bail!(DebuggerError::InvalidValue);
+                }
+
+                let new_value = if value.len() == WORD_SIZE {
+                    value.get_u64_ne()
+                } else {
+                    let mut buf = self.get_register_value(register)?.to_ne_bytes();
+                    buf[offset as usize..offset as usize + value.len()].copy_from_slice(&value);
+                    u64::from_ne_bytes(buf)
+                };
+
+                self.set_register_value(register, new_value)?;
+            }
+            ValueLoc::Address(address) => self.write_memory(address, &value)?,
+            _ => bail!("can't write location {:?}", location),
+        }
+
+        Ok(())
+    }
+
+    pub fn write_memory(&self, addr: u64, buf: &[u8]) -> Result<()> {
+        let mut procmem = fs::OpenOptions::new().write(true).open(format!("/proc/{}/mem", self.child_pid()))?;
+        procmem.seek(io::SeekFrom::Start(addr))?;
+        procmem.write_all(buf)?;
 
         Ok(())
     }
