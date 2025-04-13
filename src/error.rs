@@ -2,6 +2,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum DebuggerError {
+    #[error("invalid command")]
+    InvalidCommand,
     #[error("breakpoint not found")]
     BreakpointNotFound,
     #[error("breakpoint already exist")]

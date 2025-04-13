@@ -1,9 +1,14 @@
-use anyhow::Result;
-use clap::Parser;
-use clap::Subcommand;
+use anyhow::{bail, Result};
+use pest::iterators::Pairs;
+use pest_derive::Parser;
 
 use crate::commands;
+use crate::error::DebuggerError;
 use crate::session::{DebugSession, SessionState};
+
+#[derive(Parser)]
+#[grammar = "parser.pest"]
+pub struct CommandParser;
 
 #[allow(clippy::upper_case_acronyms)]
 pub struct FSM<'a, R: gimli::Reader> {
@@ -15,93 +20,47 @@ impl<'a, R: gimli::Reader> FSM<'a, R> {
         Self { session: debugger }
     }
 
-    pub fn handle(&mut self, command: Commands) -> Result<bool> {
-        let should_quit = command == Commands::Quit;
+    pub fn handle(&mut self, mut pairs: Pairs<Rule>) -> Result<bool> {
+        let pair = pairs.next().unwrap().into_inner().next().unwrap();
+        let rule = pair.as_rule();
 
         match self.session.get_state() {
-            SessionState::Started => match command {
-                Commands::Run => commands::control::run(self.session)?,
-                Commands::AddBreakpoint { loc } => commands::breakpoints::add(self.session, loc)?,
-                Commands::RemoveBreakpoint { loc } => commands::breakpoints::remove(self.session, &loc)?,
-                Commands::ListBreakpoints => commands::breakpoints::list(self.session)?,
-                Commands::EnableBreakpoint { loc } => commands::breakpoints::enable(self.session, &loc)?,
-                Commands::DisableBreakpoint { loc } => commands::breakpoints::disable(self.session, &loc)?,
-                Commands::ClearBreakpoints => commands::breakpoints::clear(self.session)?,
-                Commands::Quit => commands::control::stop(self.session)?,
-                _ => println!("invalid command"),
+            SessionState::Started => match rule {
+                Rule::run => commands::control::run(self.session)?,
+                Rule::add_breakpoint => commands::breakpoints::add(self.session, pair.into_inner().next().unwrap().as_str())?,
+                Rule::remove_breakpoint => commands::breakpoints::remove(self.session, pair.into_inner().next().unwrap().as_str())?,
+                Rule::list_breakpoints => commands::breakpoints::list(self.session)?,
+                Rule::enable_breakpoint => commands::breakpoints::enable(self.session, pair.into_inner().next().unwrap().as_str())?,
+                Rule::disable_breakpoint => commands::breakpoints::disable(self.session, pair.into_inner().next().unwrap().as_str())?,
+                Rule::clear_breakpoints => commands::breakpoints::clear(self.session)?,
+                Rule::quit => commands::control::stop(self.session)?,
+                _ => bail!(DebuggerError::InvalidCommand),
             },
-            SessionState::Running => match command {
-                Commands::Stop | Commands::Quit => commands::control::stop(self.session)?,
-                Commands::AddBreakpoint { loc } => commands::breakpoints::add(self.session, loc)?,
-                Commands::RemoveBreakpoint { loc } => commands::breakpoints::remove(self.session, &loc)?,
-                Commands::ListBreakpoints => commands::breakpoints::list(self.session)?,
-                Commands::EnableBreakpoint { loc } => commands::breakpoints::enable(self.session, &loc)?,
-                Commands::DisableBreakpoint { loc } => commands::breakpoints::disable(self.session, &loc)?,
-                Commands::ClearBreakpoints => commands::breakpoints::clear(self.session)?,
-                Commands::Continue => commands::control::cont(self.session)?,
-                Commands::Step => commands::control::step(self.session)?,
-                Commands::StepIn => commands::control::step_in(self.session)?,
-                Commands::StepOut => commands::control::step_out(self.session)?,
-                Commands::PrintVar { name } => commands::var::print_var(self.session, name)?,
-                Commands::SetVar { name, value } => commands::var::set_var(self.session, name, value)?,
-                _ => println!("invalid command"),
+            SessionState::Running => match rule {
+                Rule::stop | Rule::quit => commands::control::stop(self.session)?,
+                Rule::add_breakpoint => commands::breakpoints::add(self.session, pair.into_inner().next().unwrap().as_str())?,
+                Rule::remove_breakpoint => commands::breakpoints::remove(self.session, pair.into_inner().next().unwrap().as_str())?,
+                Rule::list_breakpoints => commands::breakpoints::list(self.session)?,
+                Rule::enable_breakpoint => commands::breakpoints::enable(self.session, pair.into_inner().next().unwrap().as_str())?,
+                Rule::disable_breakpoint => commands::breakpoints::disable(self.session, pair.into_inner().next().unwrap().as_str())?,
+                Rule::clear_breakpoints => commands::breakpoints::clear(self.session)?,
+                Rule::r#continue => commands::control::cont(self.session)?,
+                Rule::step => commands::control::step(self.session)?,
+                Rule::step_in => commands::control::step_in(self.session)?,
+                Rule::step_out => commands::control::step_out(self.session)?,
+                Rule::print_var => commands::var::print_var(self.session, pair.into_inner().next().map(|pair| pair.as_str()))?,
+                Rule::set_var => {
+                    let mut inner_pairs = pair.into_inner();
+                    commands::var::set_var(self.session, inner_pairs.next().unwrap().as_str(), inner_pairs.next().unwrap().as_str())?
+                }
+                _ => bail!(DebuggerError::InvalidCommand),
             },
-            SessionState::Exited => match command {
-                Commands::Quit => (),
-                _ => println!("invalid command"),
+            SessionState::Exited => match rule {
+                Rule::quit => (),
+                _ => bail!(DebuggerError::InvalidCommand),
             },
         }
 
-        Ok(should_quit)
+        Ok(rule == Rule::quit)
     }
-}
-
-#[derive(Debug, Parser)]
-#[command(multicall = true)]
-pub struct CommandParser {
-    #[command(subcommand)]
-    pub command: Commands,
-}
-
-#[derive(Debug, Subcommand, PartialEq)]
-pub enum Commands {
-    #[command(visible_alias = "r")]
-    Run,
-    Stop,
-    #[command(name = "breakpoint", visible_alias = "break", visible_alias = "b")]
-    AddBreakpoint {
-        loc: String,
-    },
-    #[command(name = "remove", visible_alias = "rm")]
-    RemoveBreakpoint {
-        loc: String,
-    },
-    #[command(name = "list", visible_alias = "l")]
-    ListBreakpoints,
-    #[command(name = "enable")]
-    EnableBreakpoint {
-        loc: String,
-    },
-    #[command(name = "disable")]
-    DisableBreakpoint {
-        loc: String,
-    },
-    #[command(name = "clear")]
-    ClearBreakpoints,
-    #[command(visible_alias = "cont", visible_alias = "c")]
-    Continue,
-    Step,
-    StepIn,
-    StepOut,
-    #[command(name = "print", visible_alias = "p")]
-    PrintVar {
-        name: Option<String>,
-    },
-    #[command(name = "set")]
-    SetVar {
-        name: String,
-        value: String,
-    },
-    #[command(visible_alias = "q")]
-    Quit,
 }

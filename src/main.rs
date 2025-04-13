@@ -15,11 +15,11 @@ mod var;
 use std::{io::Write, path::Path};
 
 use error::DebuggerError;
-use fsm::{CommandParser, FSM};
+use fsm::{CommandParser, Rule, FSM};
 
 use anyhow::{bail, Result};
-use clap::Parser;
 use debugger::Debugger;
+use pest::Parser;
 
 fn main() -> Result<()> {
     env_logger::init();
@@ -42,35 +42,21 @@ fn main() -> Result<()> {
             continue;
         }
 
-        let args = match shlex::split(line) {
-            Some(args) => args,
-            None => {
-                eprintln!("parse line");
-                continue;
-            }
-        };
-        let parser = match CommandParser::try_parse_from(args) {
-            Ok(cli) => cli,
-            Err(e) => {
-                eprintln!("parse comamnd {e}");
-                continue;
-            }
-        };
-
-        match fsm.handle(parser.command) {
-            Ok(should_quit) => {
-                if should_quit {
-                    break;
+        match CommandParser::parse(Rule::command, line) {
+            Ok(pairs) => match fsm.handle(pairs) {
+                Ok(should_quit) => {
+                    if should_quit {
+                        return Ok(());
+                    }
                 }
-            }
-            Err(e) => match e.downcast_ref::<DebuggerError>() {
-                Some(_) => eprintln!("{}", e),
-                None => return Err(e),
+                Err(e) => match e.downcast_ref::<DebuggerError>() {
+                    Some(_) => eprintln!("{}", e),
+                    None => return Err(e),
+                },
             },
+            Err(e) => eprintln!("parse command {e}"),
         };
     }
-
-    Ok(())
 }
 
 fn readline() -> Result<String> {

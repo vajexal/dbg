@@ -1,0 +1,42 @@
+command = {
+    SOI ~ (
+        add_breakpoint |
+        remove_breakpoint |
+        list_breakpoints |
+        enable_breakpoint |
+        disable_breakpoint |
+        clear_breakpoints |
+        run |
+        stop |
+        continue |
+        step_in |
+        step_out |
+        step |
+        print_var |
+        set_var |
+        quit
+    ) ~
+    EOI
+}
+
+ws = _{ " "+ }
+
+run = { "run" | "r" }
+stop = { "stop" }
+add_breakpoint = { ("breakpoint" | "break" | "b") ~ ws ~ value }
+remove_breakpoint = { ("remove" | "rm") ~ ws ~ value }
+list_breakpoints = { "list" | "l" }
+enable_breakpoint = { "enable" ~ ws ~ value }
+disable_breakpoint = { "disable" ~ ws ~ value }
+clear_breakpoints = { "clear" }
+continue = { "continue" | "cont" | "c" }
+step = { "step" }
+step_in = { "step-in" }
+step_out = { "step-out" }
+print_var = { ("print" | "p") ~ (ws ~ path)? }
+set_var = { "set" ~ ws ~ path ~ ("=" | (ws ~ "="? ~ " "*)) ~ value }
+quit = { "quit" | "q" }
+
+path = @{ name ~ ("." ~ name)* }
+name = { (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+value = { (!(" " | "\t" | "\r" | "\n") ~ ANY)+ }

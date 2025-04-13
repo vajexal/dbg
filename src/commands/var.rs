@@ -6,7 +6,7 @@ use crate::printer::Printer;
 use crate::session::DebugSession;
 use crate::var::Type;
 
-pub fn print_var<R: gimli::Reader>(session: &DebugSession<R>, name: Option<String>) -> Result<()> {
+pub fn print_var<R: gimli::Reader>(session: &DebugSession<R>, name: Option<&str>) -> Result<()> {
     let printer = Printer::new(session);
 
     match name {
@@ -25,7 +25,7 @@ pub fn print_var<R: gimli::Reader>(session: &DebugSession<R>, name: Option<Strin
     Ok(())
 }
 
-pub fn set_var<R: gimli::Reader>(session: &DebugSession<R>, name: String, value: String) -> Result<()> {
+pub fn set_var<R: gimli::Reader>(session: &DebugSession<R>, name: &str, value: &str) -> Result<()> {
     let path: Vec<&str> = name.split('.').collect();
     let loc = session.get_var_loc(&path)?;
 
@@ -58,7 +58,7 @@ pub fn set_var<R: gimli::Reader>(session: &DebugSession<R>, name: String, value:
             _ => bail!("unsupported encoding"),
         },
         Type::Pointer(_) => {
-            let value = u64::from_str_radix(value.strip_prefix("0x").unwrap_or(&value), 16).map_err(|_| DebuggerError::InvalidValue)?;
+            let value = u64::from_str_radix(value.strip_prefix("0x").unwrap_or(value), 16).map_err(|_| DebuggerError::InvalidValue)?;
             buf.put_u64_ne(value);
         }
         _ => bail!(DebuggerError::InvalidPath),
