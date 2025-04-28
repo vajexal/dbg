@@ -11,8 +11,7 @@ pub fn print_var<R: gimli::Reader>(session: &DebugSession<R>, name: Option<&str>
 
     match name {
         Some(name) => {
-            let path: Vec<&str> = name.split('.').collect();
-            let var = session.get_var(&path)?;
+            let var = session.get_var(name)?;
             printer.print(&var)?;
         }
         None => {
@@ -26,8 +25,7 @@ pub fn print_var<R: gimli::Reader>(session: &DebugSession<R>, name: Option<&str>
 }
 
 pub fn set_var<R: gimli::Reader>(session: &DebugSession<R>, name: &str, value: &str) -> Result<()> {
-    let path: Vec<&str> = name.split('.').collect();
-    let loc = session.get_var_loc(&path)?;
+    let loc = session.get_var_loc(name)?;
 
     let mut buf = BytesMut::new();
     match session.unwind_type(loc.type_id) {

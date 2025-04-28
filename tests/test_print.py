@@ -140,7 +140,7 @@ int main()
             Step("b 39", "breakpoint set"),
             Step("r"),
             Step("p root.right.value", "int value = 15"),
-            Step("p root.left", "Node* left = &{ value = 5, left = null, right = null }"),
+            Step("p *root.left", "Node *left = { value = 5, left = null, right = null }"),
             Step("p root.right.right.value", "invalid path", "int value"),
             Step("c"),
             Step("q"),

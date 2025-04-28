@@ -421,7 +421,9 @@ impl<R: gimli::Reader> DebugSession<R> {
         Ok(vars)
     }
 
-    pub fn get_var_loc(&self, path: &[&str]) -> Result<TypedValueLoc> {
+    pub fn get_var_loc(&self, path: &str) -> Result<TypedValueLoc> {
+        let deref_count = path.chars().position(|c| c != '*').ok_or(DebuggerError::InvalidPath)?;
+        let path: Vec<&str> = path[deref_count..].split('.').collect();
         let (&name, path) = path.split_first().ok_or(DebuggerError::InvalidPath)?;
         let ip = self.get_ip()?;
         let func = self.loc_finder.find_func_by_address(ip).ok_or(anyhow!("get current func"))?;
@@ -429,18 +431,20 @@ impl<R: gimli::Reader> DebugSession<R> {
             Some(var_ref) => var_ref,
             None => bail!(DebuggerError::VarNotFound(String::from(name))),
         };
-        let loc = self.get_value_loc_by_var_ref(&func, var_ref)?;
-        let loc = self.unwind_loc(loc, path)?;
+        let mut loc = self.get_value_loc_by_var_ref(&func, var_ref)?;
+        loc = self.unwind_loc(loc, path)?;
+        loc = self.deref_loc(loc, deref_count)?;
 
         Ok(loc)
     }
 
-    pub fn get_var(&self, path: &[&str]) -> Result<Var> {
+    pub fn get_var(&self, path: &str) -> Result<Var> {
         let loc = self.get_var_loc(path)?;
         let size = self.get_type_size(loc.type_id)?;
         let buf = self.read_value_loc(loc.location, size)?;
         let value = Value::new(loc.type_id, buf);
-        let var = Var::new(path.last().copied().unwrap(), value);
+        let name = Self::get_var_name(path)?;
+        let var = Var::new(name, value);
         Ok(var)
     }
 
@@ -491,6 +495,36 @@ impl<R: gimli::Reader> DebugSession<R> {
             },
             _ => bail!(DebuggerError::InvalidPath),
         }
+    }
+
+    fn deref_loc(&self, loc: TypedValueLoc, count: usize) -> Result<TypedValueLoc> {
+        if count == 0 {
+            return Ok(loc);
+        }
+
+        match self.get_type(loc.type_id) {
+            Type::Pointer(subtype_id) => {
+                let ptr = self.read_value_loc(loc.location, WORD_SIZE)?.get_u64_ne();
+                if ptr == 0 {
+                    bail!(DebuggerError::InvalidPath);
+                }
+
+                self.deref_loc(TypedValueLoc::new(ValueLoc::Address(ptr), *subtype_id), count - 1)
+            }
+            Type::Typedef(_, subtype_id) => self.deref_loc(loc.with_type(*subtype_id), count),
+            _ => bail!(DebuggerError::InvalidPath),
+        }
+    }
+
+    fn get_var_name(path: &str) -> Result<Rc<str>> {
+        let pos = path.find(|c| c != '*').ok_or(DebuggerError::InvalidPath)?;
+        if pos == 0 {
+            return Ok(Rc::from(path.split('.').next_back().unwrap()));
+        }
+
+        let (prefix, path) = path.split_at(pos);
+        let name = format!("{}{}", prefix, path.split('.').next_back().unwrap());
+        Ok(Rc::from(name))
     }
 
     pub fn get_type(&self, type_id: TypeId) -> &Type {

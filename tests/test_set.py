@@ -11,7 +11,7 @@ int main()
     int i = 123;
     float f = 3.14;
     bool b = true;
-    void *p = &i;
+    int *p = &i;
     printf("i = %d, f = %.2f, b = %s, p = %p\\n", i, f, b ? "true" : "false", p);
     return 0;
 }
@@ -28,8 +28,9 @@ int main()
             Step("set b true"),
             Step("p b", "bool b = true"),
             Step("set b none", "invalid value"),
-            Step("set p 0xffffffff"),
-            Step("p p", "void* p = 0xffffffff"),
+            Step("set *p = 345"),
+            Step("p *p", "int *p = 345"),
+            Step("p i", "int i = 345"),
             Step("set x 123", "x not found"),
             Step("set i foo", "invalid value"),
             Step("q"),

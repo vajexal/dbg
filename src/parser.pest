@@ -37,6 +37,6 @@ print_var = { ("print" | "p") ~ (ws ~ path)? }
 set_var = { "set" ~ ws ~ path ~ ("=" | (ws ~ "="? ~ " "*)) ~ value }
 quit = { "quit" | "q" }
 
-path = @{ name ~ ("." ~ name)* }
+path = @{ "*"* ~ name ~ ("." ~ name)* }
 name = { (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 value = { (!(" " | "\t" | "\r" | "\n") ~ ANY)+ }

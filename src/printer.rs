@@ -107,16 +107,7 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                     }
                 }
 
-                // is it void* ?
-                if let Type::Void = subtype {
-                    write!(f, "{:#x}", ptr)?;
-                    return Ok(());
-                }
-
-                write!(f, "&")?;
-                let size = self.session.get_type_size(*subtype_id)?;
-                let buf = self.session.read_address(ptr, size)?;
-                self.print_value(f, Value::new(*subtype_id, buf))?;
+                write!(f, "{:#x}", ptr)?;
             }
             Type::Struct { fields, .. } => {
                 write!(f, "{{ ")?;
