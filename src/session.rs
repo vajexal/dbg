@@ -8,6 +8,7 @@ use std::process;
 use std::rc::Rc;
 
 use crate::breakpoint::Breakpoint;
+use crate::context::Context;
 use crate::error::DebuggerError;
 use crate::loc_finder::{LocFinder, VarRef};
 use crate::location::{TypedValueLoc, ValueLoc};
@@ -186,15 +187,15 @@ impl<R: gimli::Reader> DebugSession<R> {
     }
 
     pub fn step_out(&self) -> Result<()> {
-        let ip = self.get_ip()?;
-        if self.loc_finder.is_inside_main(ip) {
+        let ctx = self.get_context()?;
+        if self.loc_finder.is_inside_main(ctx.ip) {
             log::trace!("step out of main");
             self.cont()?;
             self.wait()?;
             return Ok(());
         }
 
-        let return_ip = self.get_func_return_addr()?;
+        let return_ip = self.get_func_return_addr(ctx)?;
         log::trace!("step out to {:#x}", return_ip);
 
         // there is posibility that we'll stop with bp <= start_bp (using some recursion), but we'll ignore this case for now
@@ -215,19 +216,17 @@ impl<R: gimli::Reader> DebugSession<R> {
         Ok(())
     }
 
-    fn get_func_return_addr(&self) -> Result<u64> {
-        // todo get all registers in one syscall
-        let ip = self.get_ip()?;
-        let func_start = self.loc_finder.find_func_start(ip).ok_or(anyhow!("find func start"))?;
+    fn get_func_return_addr(&self, ctx: Context) -> Result<u64> {
+        let func_start = self.loc_finder.find_func_start(ctx.ip).ok_or(anyhow!("find func start"))?;
 
         self.check_func_prologue(func_start)?;
 
-        let return_addr_location = if ip - func_start <= 4 {
-            self.get_sp()?
-        } else if ip - func_start <= 8 {
-            self.get_sp()? + WORD_SIZE as u64
+        let return_addr_location = if ctx.ip - func_start <= 4 {
+            ctx.sp
+        } else if ctx.ip - func_start <= 8 {
+            ctx.sp + WORD_SIZE as u64
         } else {
-            self.get_bp()? + WORD_SIZE as u64
+            ctx.bp + WORD_SIZE as u64
         };
 
         let return_addr = self.read_address(return_addr_location, WORD_SIZE)?.get_u64_ne();
@@ -247,16 +246,6 @@ impl<R: gimli::Reader> DebugSession<R> {
     fn get_ip(&self) -> Result<u64> {
         let regs = ptrace::getregs(self.child_pid())?;
         Ok(regs.rip)
-    }
-
-    /// get stack base pointer
-    fn get_bp(&self) -> Result<u64> {
-        self.get_register_value(gimli::X86_64::RBP)
-    }
-
-    /// get stack pointer
-    fn get_sp(&self) -> Result<u64> {
-        self.get_register_value(gimli::X86_64::RSP)
     }
 
     fn get_current_line(&self) -> Result<Option<Rc<str>>> {
@@ -593,6 +582,11 @@ impl<R: gimli::Reader> DebugSession<R> {
         }
 
         Ok(eval)
+    }
+
+    fn get_context(&self) -> Result<Context> {
+        let regs = ptrace::getregs(self.child_pid())?;
+        Ok(Context::new(regs))
     }
 
     fn get_register_value(&self, register: gimli::Register) -> Result<u64> {

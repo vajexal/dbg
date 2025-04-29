@@ -1,5 +1,6 @@
 mod breakpoint;
 mod commands;
+mod context;
 mod debugger;
 mod error;
 mod fsm;
