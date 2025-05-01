@@ -23,11 +23,11 @@ ws = _{ " "+ }
 
 run = { "run" | "r" }
 stop = { "stop" }
-add_breakpoint = { ("breakpoint" | "break" | "b") ~ ws ~ value }
-remove_breakpoint = { ("remove" | "rm") ~ ws ~ value }
+add_breakpoint = { ("breakpoint" | "break" | "b") ~ ws ~ breakpoint_name }
+remove_breakpoint = { ("remove" | "rm") ~ ws ~ breakpoint_name }
 list_breakpoints = { "list" | "l" }
-enable_breakpoint = { "enable" ~ ws ~ value }
-disable_breakpoint = { "disable" ~ ws ~ value }
+enable_breakpoint = { "enable" ~ ws ~ breakpoint_name }
+disable_breakpoint = { "disable" ~ ws ~ breakpoint_name }
 clear_breakpoints = { "clear" }
 continue = { "continue" | "cont" | "c" }
 step = { "step" }
@@ -37,6 +37,24 @@ print_var = { ("print" | "p") ~ (ws ~ path)? }
 set_var = { "set" ~ ws ~ path ~ ("=" | (ws ~ "="? ~ " "*)) ~ value }
 quit = { "quit" | "q" }
 
+breakpoint_name = { (!(" " | "\t" | "\r" | "\n") ~ ANY)+ }
 path = @{ "*"* ~ name ~ ("." ~ name)* }
 name = { (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
-value = { (!(" " | "\t" | "\r" | "\n") ~ ANY)+ }
+
+value = _{ number | boolean | string }
+number = @{ hex | dec }
+hex = @{ "0x" ~ ASCII_HEX_DIGIT{1, 8} }
+dec = @{
+    "-"?
+    ~ ("0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*)
+    ~ ("." ~ ASCII_DIGIT*)?
+    ~ (^"e" ~ ("+" | "-")? ~ ASCII_DIGIT+)?
+}
+boolean = { "true" | "false" }
+string = ${ "\"" ~ inner ~ "\"" }
+inner = @{ char* }
+char = {
+    !("\"" | "\\") ~ ANY
+    | "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t")
+    | "\\" ~ ("u" ~ ASCII_HEX_DIGIT{4})
+}

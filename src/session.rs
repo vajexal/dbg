@@ -500,7 +500,7 @@ impl<R: gimli::Reader> DebugSession<R> {
 
                 self.deref_loc(TypedValueLoc::new(ValueLoc::Address(ptr), *subtype_id), count - 1)
             }
-            Type::Typedef(_, subtype_id) => self.deref_loc(loc.with_type(*subtype_id), count),
+            Type::Const(subtype_id) | Type::Typedef(_, subtype_id) => self.deref_loc(loc.with_type(*subtype_id), count),
             _ => bail!(DebuggerError::InvalidPath),
         }
     }
@@ -525,11 +525,7 @@ impl<R: gimli::Reader> DebugSession<R> {
     }
 
     pub fn unwind_type(&self, type_id: TypeId) -> &Type {
-        match self.get_type(type_id) {
-            Type::Const(subtype_id) => self.unwind_type(*subtype_id),
-            Type::Typedef(_, subtype_id) => self.unwind_type(*subtype_id),
-            typ => typ,
-        }
+        self.loc_finder.unwind_type(type_id)
     }
 
     fn eval_expr(&self, expr: gimli::Expression<R>, unit_ref: &gimli::UnitRef<R>, current_func: &str) -> Result<gimli::Evaluation<R>> {
@@ -631,8 +627,12 @@ impl<R: gimli::Reader> DebugSession<R> {
         Ok(value)
     }
 
-    pub fn read_c_string_at(&self, addr: u64) -> Result<String> {
+    pub fn read_c_string(&self, addr: u64) -> Result<String> {
         log::trace!("read c string at {:#x}", addr);
+
+        if addr == 0 {
+            return Ok(String::from("null")); // special case
+        }
 
         let mut buf = Vec::new();
         let mut read_buf = [0; READ_MEM_BUF_SIZE];
@@ -675,7 +675,7 @@ impl<R: gimli::Reader> DebugSession<R> {
         Ok(buf.into())
     }
 
-    pub fn read_address(&self, addr: u64, size: usize) -> Result<Bytes> {
+    fn read_address(&self, addr: u64, size: usize) -> Result<Bytes> {
         log::trace!("read {} bytes from address {:#x}", size, addr);
 
         let mut buf = vec![0; size];
@@ -719,11 +719,65 @@ impl<R: gimli::Reader> DebugSession<R> {
         Ok(())
     }
 
-    pub fn write_memory(&self, addr: u64, buf: &[u8]) -> Result<()> {
+    fn write_memory(&self, addr: u64, buf: &[u8]) -> Result<()> {
         let mut procmem = fs::OpenOptions::new().write(true).open(format!("/proc/{}/mem", self.child_pid()))?;
         procmem.seek(io::SeekFrom::Start(addr))?;
         procmem.write_all(buf)?;
 
         Ok(())
+    }
+
+    pub fn alloc_c_string(&self, s: &str) -> Result<u64> {
+        log::trace!("allocate c string {:?}", s);
+
+        let new_str_addr = self.child_alloc(s.len() + 1)?;
+        log::trace!("allocated memory at {:#x}", new_str_addr);
+
+        let mut buf = String::with_capacity(s.len() + 1);
+        buf.push_str(s);
+        buf.push('\0');
+
+        self.write_memory(new_str_addr, buf.as_bytes())?;
+
+        Ok(new_str_addr)
+    }
+
+    fn child_alloc(&self, size: usize) -> Result<u64> {
+        log::trace!("allocate {} bytes", size);
+
+        let mut regs = ptrace::getregs(self.child_pid())?; // backup registers
+        #[allow(clippy::clone_on_copy)]
+        let original_regs = regs.clone();
+
+        regs.rax = 0x9; // mmap syscall
+        regs.rdi = 0; // address
+        regs.rsi = size as u64;
+        regs.rdx = (libc::PROT_READ | libc::PROT_WRITE) as u64;
+        regs.r10 = (libc::MAP_PRIVATE | libc::MAP_ANONYMOUS) as u64;
+        regs.r8 = (-1_i64) as u64; // allocate on memory
+        regs.r9 = 0; // offset
+
+        let original_bytecode = ptrace::read(self.child_pid(), regs.rip as ptrace::AddressType)?;
+        let bytecode_with_syscall = (original_bytecode & !0xffff) | 0x050f; // set syscall instruction
+        ptrace::write(self.child_pid(), regs.rip as ptrace::AddressType, bytecode_with_syscall)?;
+        log::trace!("replace {:#x} with {:#x} at {:#x}", original_bytecode, bytecode_with_syscall, regs.rip);
+        ptrace::setregs(self.child_pid(), regs)?;
+
+        ptrace::step(self.child_pid(), None)?;
+        if let wait::WaitStatus::Exited(_, _) = wait::waitpid(self.child_pid(), None)? {
+            self.state.set(SessionState::Exited);
+            bail!("child exited");
+        }
+
+        let regs = ptrace::getregs(self.child_pid())?;
+        if (regs.rax as i64) < 0 {
+            log::trace!("error allocating memory: {}", -(regs.rax as i64)); // log errno
+            bail!("can't allocate memory");
+        }
+
+        ptrace::write(self.child_pid(), original_regs.rip as ptrace::AddressType, original_bytecode)?; // restore bytecode
+        ptrace::setregs(self.child_pid(), original_regs)?; // restore registers
+
+        Ok(regs.rax)
     }
 }

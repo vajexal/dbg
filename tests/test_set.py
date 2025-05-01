@@ -12,7 +12,8 @@ int main()
     float f = 3.14;
     bool b = true;
     int *p = &i;
-    printf("i = %d, f = %.2f, b = %s, p = %p\\n", i, f, b ? "true" : "false", p);
+    const char *s = "hello world";
+    printf("i = %d, f = %.2f, b = %s, p = %p, s = %s\\n", i, f, b ? "true" : "false", p, s);
     return 0;
 }
 """,
@@ -27,12 +28,13 @@ int main()
             Step("p b", "bool b = false"),
             Step("set b true"),
             Step("p b", "bool b = true"),
-            Step("set b none", "invalid value"),
+            Step("set b 123", "invalid value"),
             Step("set *p = 345"),
             Step("p *p", "int *p = 345"),
             Step("p i", "int i = 345"),
             Step("set x 123", "x not found"),
-            Step("set i foo", "invalid value"),
+            Step('set s = "somebody once told me the world is gonna roll me"'),
+            Step("p s", 'const char* s = "somebody once told me the world is gonna roll me"'),
             Step("q"),
         ]
     )

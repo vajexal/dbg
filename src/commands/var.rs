@@ -59,6 +59,11 @@ pub fn set_var<R: gimli::Reader>(session: &DebugSession<R>, name: &str, value: &
             let value = u64::from_str_radix(value.strip_prefix("0x").unwrap_or(value), 16).map_err(|_| DebuggerError::InvalidValue)?;
             buf.put_u64_ne(value);
         }
+        Type::String(_) => {
+            let new_str: String = serde_json::from_str(value).map_err(|_| DebuggerError::InvalidValue)?;
+            let new_str_addr = session.alloc_c_string(&new_str)?;
+            buf.put_u64_ne(new_str_addr);
+        }
         _ => bail!(DebuggerError::InvalidPath),
     }
 

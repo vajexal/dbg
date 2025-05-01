@@ -10,6 +10,7 @@ pub enum Type {
     Base { name: Rc<str>, encoding: gimli::DwAte, size: u16 },
     Const(TypeId),
     Pointer(TypeId),
+    String(TypeId),
     Struct { name: Rc<str>, size: u16, fields: Vec<Field> },
     Typedef(Rc<str>, TypeId),
 }

@@ -31,9 +31,7 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
 
     fn print_type(&self, f: &mut impl io::Write, type_id: TypeId) -> Result<()> {
         match self.session.get_type(type_id) {
-            Type::Void => {
-                write!(f, "void")?;
-            }
+            Type::Void => write!(f, "void")?,
             Type::Base { name, encoding, .. } => {
                 match *encoding {
                     gimli::DW_ATE_boolean => write!(f, "bool")?,
@@ -44,17 +42,13 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                 write!(f, "const ")?;
                 self.print_type(f, *subtype_id)?;
             }
-            Type::Pointer(subtype_id) => {
+            Type::Pointer(subtype_id) | Type::String(subtype_id) => {
                 self.print_type(f, *subtype_id)?;
                 write!(f, "*")?;
             }
-            Type::Struct { name, .. } => {
-                write!(f, "{}", name)?;
-            }
-            Type::Typedef(name, _) => {
-                write!(f, "{}", name)?;
-            }
-        }
+            Type::Struct { name, .. } => write!(f, "{}", name)?,
+            Type::Typedef(name, _) => write!(f, "{}", name)?,
+        };
 
         Ok(())
     }
@@ -90,24 +84,18 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                 };
             }
             Type::Const(subtype_id) => self.print_value(f, Value::new(*subtype_id, value.buf))?,
-            Type::Pointer(subtype_id) => {
+            Type::Pointer(_) => {
                 let ptr = value.buf.get_u64_ne();
-                // is it null?
                 if ptr == 0 {
                     return Ok(write!(f, "null")?);
                 }
 
-                // is it c-string?
-                let subtype = self.session.unwind_type(*subtype_id);
-                if let Type::Base { encoding, .. } = subtype {
-                    if *encoding == gimli::DW_ATE_signed_char {
-                        let s = self.session.read_c_string_at(ptr)?;
-                        write!(f, "{:?}", s)?;
-                        return Ok(());
-                    }
-                }
-
                 write!(f, "{:#x}", ptr)?;
+            }
+            Type::String(_) => {
+                let ptr = value.buf.get_u64_ne();
+                let s = self.session.read_c_string(ptr)?;
+                write!(f, "{:?}", s)?;
             }
             Type::Struct { fields, .. } => {
                 write!(f, "{{ ")?;
