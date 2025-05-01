@@ -22,4 +22,9 @@ Debugger for linux x86_64
     - `p` - print all vars
     - `p foo` - print var *foo*
     - `p foo.bar` - print var *bar* of object *foo*
+- `set` - set var. Examples:
+    - `set i 123`
+    - `set b true`
+    - `set s = "hello world"` - sets string value
+    - `set *foo.p = 123` - sets value behind pointer
 - `q` - quit the program
