@@ -32,6 +32,8 @@ int main()
             Step("set *p = 345"),
             Step("p *p", "int *p = 345"),
             Step("p i", "int i = 345"),
+            Step("set p = null"),
+            Step("p p", "int* p = null"),
             Step("set x 123", "x not found"),
             Step('set s = "somebody once told me the world is gonna roll me"'),
             Step("p s", 'const char* s = "somebody once told me the world is gonna roll me"'),

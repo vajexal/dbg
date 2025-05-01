@@ -56,8 +56,12 @@ pub fn set_var<R: gimli::Reader>(session: &DebugSession<R>, name: &str, value: &
             _ => bail!("unsupported encoding"),
         },
         Type::Pointer(_) => {
-            let value = u64::from_str_radix(value.strip_prefix("0x").unwrap_or(value), 16).map_err(|_| DebuggerError::InvalidValue)?;
-            buf.put_u64_ne(value);
+            let ptr = if value == "null" {
+                0
+            } else {
+                u64::from_str_radix(value.strip_prefix("0x").unwrap_or(value), 16).map_err(|_| DebuggerError::InvalidValue)?
+            };
+            buf.put_u64_ne(ptr);
         }
         Type::String(_) => {
             let new_str: String = serde_json::from_str(value).map_err(|_| DebuggerError::InvalidValue)?;
