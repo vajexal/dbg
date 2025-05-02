@@ -268,8 +268,8 @@ impl<R: gimli::Reader> DebugSession<R> {
         }
 
         log::trace!("set breakpoint at {:#x}", addr);
-        let data = ptrace::read(self.child_pid(), addr as ptrace::AddressType)?;
-        let breakpoint = Breakpoint::new(addr, data, loc);
+        let original_bytecode = ptrace::read(self.child_pid(), addr as ptrace::AddressType)?;
+        let breakpoint = Breakpoint::new(addr, original_bytecode, loc);
         self.enable_bp(&breakpoint)?;
 
         self.breakpoints.insert(addr, breakpoint);
@@ -337,15 +337,17 @@ impl<R: gimli::Reader> DebugSession<R> {
     }
 
     fn enable_bp(&self, breakpoint: &Breakpoint) -> Result<()> {
-        let data_with_trap = (breakpoint.original_data & !0xff) | 0xcc;
+        let bytecode_with_trap = (breakpoint.original_bytecode & !0xff) | 0xcc;
 
-        log::trace!("replace {:#x} with {:#x}", breakpoint.addr, data_with_trap);
-        ptrace::write(self.child_pid(), breakpoint.addr as ptrace::AddressType, data_with_trap)?;
+        log::trace!(
+            "replace {:#x} with {:#x} at {:#x}",
+            breakpoint.original_bytecode,
+            bytecode_with_trap,
+            breakpoint.addr
+        );
+        ptrace::write(self.child_pid(), breakpoint.addr as ptrace::AddressType, bytecode_with_trap)?;
 
         breakpoint.enabled.set(true);
-
-        let readback_data = ptrace::read(self.child_pid(), breakpoint.addr as ptrace::AddressType)?;
-        log::trace!("data after trap {:#x}: {:#x}", breakpoint.addr, readback_data);
 
         Ok(())
     }
@@ -358,8 +360,8 @@ impl<R: gimli::Reader> DebugSession<R> {
     }
 
     fn disable_bp(&self, breakpoint: &Breakpoint) -> Result<()> {
-        ptrace::write(self.child_pid(), breakpoint.addr as ptrace::AddressType, breakpoint.original_data)?;
-        log::trace!("restored data at {:#x} to {:#x}", breakpoint.addr, breakpoint.original_data);
+        ptrace::write(self.child_pid(), breakpoint.addr as ptrace::AddressType, breakpoint.original_bytecode)?;
+        log::trace!("restored bytecode at {:#x} to {:#x}", breakpoint.addr, breakpoint.original_bytecode);
 
         breakpoint.enabled.set(false);
 
@@ -372,16 +374,13 @@ impl<R: gimli::Reader> DebugSession<R> {
             Entry::Vacant(vacant_entry) => {
                 log::trace!("set trap at {:#x}", addr);
 
-                let original_data = ptrace::read(self.child_pid(), addr as ptrace::AddressType)?;
-                let data_with_trap = (original_data & !0xff) | 0xcc;
+                let original_bytecode = ptrace::read(self.child_pid(), addr as ptrace::AddressType)?;
+                let bytecode_with_trap = (original_bytecode & !0xff) | 0xcc;
 
-                log::trace!("replace {:#x} with {:#x}", addr, data_with_trap);
-                ptrace::write(self.child_pid(), addr as ptrace::AddressType, data_with_trap)?;
+                log::trace!("replace {:#x} with {:#x} at {:#x}", original_bytecode, bytecode_with_trap, addr);
+                ptrace::write(self.child_pid(), addr as ptrace::AddressType, bytecode_with_trap)?;
 
-                let readback_data = ptrace::read(self.child_pid(), addr as ptrace::AddressType)?;
-                log::trace!("data after trap {:#x}: {:#x}", addr, readback_data);
-
-                vacant_entry.insert(Trap::new(original_data));
+                vacant_entry.insert(Trap::new(original_bytecode));
 
                 Ok(())
             }
@@ -390,8 +389,8 @@ impl<R: gimli::Reader> DebugSession<R> {
 
     fn remove_trap(&self, addr: u64) -> Result<()> {
         if let Some(trap) = self.traps.borrow_mut().remove(&addr) {
-            ptrace::write(self.child_pid(), addr as ptrace::AddressType, trap.original_data)?;
-            log::trace!("restored data at {:#x} to {:#x}", addr, trap.original_data);
+            ptrace::write(self.child_pid(), addr as ptrace::AddressType, trap.original_bytecode)?;
+            log::trace!("restored bytecode at {:#x} to {:#x}", addr, trap.original_bytecode);
         }
 
         Ok(())
