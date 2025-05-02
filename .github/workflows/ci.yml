@@ -15,7 +15,7 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Install rust tools
-      run: rustup component add rustfmt
+      run: rustup component add rustfmt clippy
 
     - name: Check formatting
       run: cargo fmt --all -- --check
@@ -31,5 +31,5 @@ jobs:
 
     - name: Run e2e tests
       run: |
-        python -m pip install pytest pytest-timeout
-        pytest --timeout=10 tests
+        python -m pip install pytest pytest-timeout pytest-xdist
+        pytest --timeout=10 -n auto tests
