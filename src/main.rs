@@ -55,7 +55,7 @@ fn main() -> Result<()> {
                     None => return Err(e),
                 },
             },
-            Err(e) => eprintln!("parse command {e}"),
+            Err(e) => eprintln!("parser error: {e}"),
         };
     }
 }

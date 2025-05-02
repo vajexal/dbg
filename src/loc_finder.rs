@@ -279,7 +279,7 @@ impl<R: gimli::Reader> LocFinder<R> {
                 // check for c-string
                 let subtype = self.unwind_type(subtype_id);
                 if let Type::Base { encoding, .. } = subtype {
-                    if *encoding == gimli::DW_ATE_signed_char {
+                    if encoding == gimli::DW_ATE_signed_char {
                         typ = Type::String(subtype_id)
                     }
                 }
@@ -329,7 +329,11 @@ impl<R: gimli::Reader> LocFinder<R> {
                     });
                 }
 
-                Type::Struct { name, size: byte_size, fields }
+                Type::Struct {
+                    name,
+                    size: byte_size,
+                    fields: Rc::from(fields),
+                }
             }
             gimli::DW_TAG_typedef => {
                 let name_attr = entry.attr_value(gimli::DW_AT_name)?.ok_or(anyhow!("get name attr value"))?;
@@ -346,25 +350,25 @@ impl<R: gimli::Reader> LocFinder<R> {
         Ok(type_id)
     }
 
-    pub fn get_type(&self, type_id: TypeId) -> &Type {
-        self.types.get(type_id).unwrap()
+    pub fn get_type(&self, type_id: TypeId) -> Type {
+        self.types.get(type_id).cloned().unwrap()
     }
 
     pub fn get_type_size(&self, type_id: TypeId) -> Result<usize> {
         match self.get_type(type_id) {
             Type::Void => Err(anyhow!("void have no size")),
-            Type::Base { size, .. } => Ok(*size as usize),
-            Type::Const(subtype_id) => self.get_type_size(*subtype_id),
+            Type::Base { size, .. } => Ok(size as usize),
+            Type::Const(subtype_id) => self.get_type_size(subtype_id),
             Type::Pointer(_) | Type::String(_) => Ok(WORD_SIZE),
-            Type::Struct { size, .. } => Ok(*size as usize),
-            Type::Typedef(_, subtype_id) => self.get_type_size(*subtype_id),
+            Type::Struct { size, .. } => Ok(size as usize),
+            Type::Typedef(_, subtype_id) => self.get_type_size(subtype_id),
         }
     }
 
-    pub fn unwind_type(&self, type_id: TypeId) -> &Type {
+    pub fn unwind_type(&self, type_id: TypeId) -> Type {
         match self.get_type(type_id) {
-            Type::Const(subtype_id) => self.unwind_type(*subtype_id),
-            Type::Typedef(_, subtype_id) => self.unwind_type(*subtype_id),
+            Type::Const(subtype_id) => self.unwind_type(subtype_id),
+            Type::Typedef(_, subtype_id) => self.unwind_type(subtype_id),
             typ => typ,
         }
     }

@@ -29,7 +29,7 @@ pub fn set_var<R: gimli::Reader>(session: &DebugSession<R>, name: &str, value: &
 
     let mut buf = BytesMut::new();
     match session.unwind_type(loc.type_id) {
-        Type::Base { encoding, size, .. } => match *encoding {
+        Type::Base { encoding, size, .. } => match encoding {
             gimli::DW_ATE_boolean => {
                 let value = value.parse::<bool>().map_err(|_| DebuggerError::InvalidValue)?;
                 buf.put_i8(value as i8);

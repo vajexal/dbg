@@ -468,14 +468,14 @@ impl<R: gimli::Reader> DebugSession<R> {
         }
 
         match self.get_type(loc.type_id) {
-            Type::Const(subtype_id) | Type::Typedef(_, subtype_id) => self.unwind_loc(loc.with_type(*subtype_id), path),
+            Type::Const(subtype_id) | Type::Typedef(_, subtype_id) => self.unwind_loc(loc.with_type(subtype_id), path),
             Type::Pointer(subtype_id) => {
                 let ptr = self.read_value_loc(loc.location, WORD_SIZE)?.get_u64_ne();
                 if ptr == 0 {
                     bail!(DebuggerError::InvalidPath);
                 }
 
-                self.unwind_loc(TypedValueLoc::new(ValueLoc::Address(ptr), *subtype_id), path)
+                self.unwind_loc(TypedValueLoc::new(ValueLoc::Address(ptr), subtype_id), path)
             }
             Type::Struct { fields, .. } => match fields.iter().find(|&field| field.name.as_ref() == path[0]) {
                 Some(field) => self.unwind_loc(TypedValueLoc::new(loc.location.with_offset(field.offset), field.type_id), &path[1..]),
@@ -497,9 +497,9 @@ impl<R: gimli::Reader> DebugSession<R> {
                     bail!(DebuggerError::InvalidPath);
                 }
 
-                self.deref_loc(TypedValueLoc::new(ValueLoc::Address(ptr), *subtype_id), count - 1)
+                self.deref_loc(TypedValueLoc::new(ValueLoc::Address(ptr), subtype_id), count - 1)
             }
-            Type::Const(subtype_id) | Type::Typedef(_, subtype_id) => self.deref_loc(loc.with_type(*subtype_id), count),
+            Type::Const(subtype_id) | Type::Typedef(_, subtype_id) => self.deref_loc(loc.with_type(subtype_id), count),
             _ => bail!(DebuggerError::InvalidPath),
         }
     }
@@ -515,7 +515,7 @@ impl<R: gimli::Reader> DebugSession<R> {
         Ok(Rc::from(name))
     }
 
-    pub fn get_type(&self, type_id: TypeId) -> &Type {
+    pub fn get_type(&self, type_id: TypeId) -> Type {
         self.loc_finder.get_type(type_id)
     }
 
@@ -523,7 +523,7 @@ impl<R: gimli::Reader> DebugSession<R> {
         self.loc_finder.get_type_size(type_id)
     }
 
-    pub fn unwind_type(&self, type_id: TypeId) -> &Type {
+    pub fn unwind_type(&self, type_id: TypeId) -> Type {
         self.loc_finder.unwind_type(type_id)
     }
 

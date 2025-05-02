@@ -33,17 +33,17 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
         match self.session.get_type(type_id) {
             Type::Void => write!(f, "void")?,
             Type::Base { name, encoding, .. } => {
-                match *encoding {
+                match encoding {
                     gimli::DW_ATE_boolean => write!(f, "bool")?,
                     _ => write!(f, "{}", name)?,
                 };
             }
             Type::Const(subtype_id) => {
                 write!(f, "const ")?;
-                self.print_type(f, *subtype_id)?;
+                self.print_type(f, subtype_id)?;
             }
             Type::Pointer(subtype_id) | Type::String(subtype_id) => {
-                self.print_type(f, *subtype_id)?;
+                self.print_type(f, subtype_id)?;
                 write!(f, "*")?;
             }
             Type::Struct { name, .. } => write!(f, "{}", name)?,
@@ -59,7 +59,7 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
         match typ {
             Type::Void => bail!(DebuggerError::InvalidPath),
             Type::Base { encoding, size, .. } => {
-                match *encoding {
+                match encoding {
                     gimli::DW_ATE_boolean => write!(f, "{}", value.buf.get_u8() != 0)?,
                     gimli::DW_ATE_signed => match size {
                         1 => write!(f, "{}", value.buf.get_i8())?,
@@ -83,7 +83,7 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                     _ => bail!("unsupported encoding"),
                 };
             }
-            Type::Const(subtype_id) => self.print_value(f, Value::new(*subtype_id, value.buf))?,
+            Type::Const(subtype_id) => self.print_value(f, Value::new(subtype_id, value.buf))?,
             Type::Pointer(_) => {
                 let ptr = value.buf.get_u64_ne();
                 if ptr == 0 {
@@ -110,7 +110,7 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
 
                 write!(f, " }}")?;
             }
-            Type::Typedef(_, subtype_id) => self.print_value(f, Value::new(*subtype_id, value.buf))?,
+            Type::Typedef(_, subtype_id) => self.print_value(f, Value::new(subtype_id, value.buf))?,
         };
 
         Ok(())

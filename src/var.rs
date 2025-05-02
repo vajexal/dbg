@@ -11,7 +11,7 @@ pub enum Type {
     Const(TypeId),
     Pointer(TypeId),
     String(TypeId),
-    Struct { name: Rc<str>, size: u16, fields: Vec<Field> },
+    Struct { name: Rc<str>, size: u16, fields: Rc<Vec<Field>> },
     Typedef(Rc<str>, TypeId),
 }
 
