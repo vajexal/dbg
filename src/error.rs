@@ -16,4 +16,6 @@ pub enum DebuggerError {
     InvalidPath,
     #[error("invalid value")]
     InvalidValue,
+    #[error("invalid location")]
+    InvalidLocation,
 }

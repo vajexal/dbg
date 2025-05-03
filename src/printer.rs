@@ -5,7 +5,8 @@ use bytes::Buf;
 
 use crate::error::DebuggerError;
 use crate::session::DebugSession;
-use crate::var::{Type, TypeId, Value, Var};
+use crate::types::{Type, TypeId};
+use crate::var::{Value, Var};
 
 pub struct Printer<'a, R: gimli::Reader> {
     session: &'a DebugSession<R>,
@@ -30,7 +31,7 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
     }
 
     fn print_type(&self, f: &mut impl io::Write, type_id: TypeId) -> Result<()> {
-        match self.session.get_type(type_id) {
+        match self.session.get_type_storage().get(type_id)? {
             Type::Void => write!(f, "void")?,
             Type::Base { name, encoding, .. } => {
                 match encoding {
@@ -54,7 +55,7 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
     }
 
     fn print_value(&self, f: &mut impl io::Write, mut value: Value) -> Result<()> {
-        let typ = self.session.get_type(value.type_id);
+        let typ = self.session.get_type_storage().get(value.type_id)?;
 
         match typ {
             Type::Void => bail!(DebuggerError::InvalidPath),

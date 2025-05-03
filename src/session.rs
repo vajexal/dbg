@@ -13,9 +13,10 @@ use crate::error::DebuggerError;
 use crate::loc_finder::{LocFinder, VarRef};
 use crate::location::{TypedValueLoc, ValueLoc};
 use crate::trap::Trap;
+use crate::types::{Type, TypeStorage};
 use crate::unwinder::Unwinder;
 use crate::utils::WORD_SIZE;
-use crate::var::{Type, TypeId, Value, Var};
+use crate::var::{Operator, Value, Var};
 
 use anyhow::{anyhow, bail, Result};
 use bytes::{Buf, Bytes};
@@ -37,6 +38,7 @@ pub struct DebugSession<R: gimli::Reader> {
     dwarf: gimli::Dwarf<R>,
     unwinder: Unwinder<R>,
     loc_finder: LocFinder<R>,
+    type_storage: TypeStorage,
     child: process::Child,
     base_address: u64,
     breakpoints: HashMap<u64, Breakpoint>,
@@ -44,17 +46,29 @@ pub struct DebugSession<R: gimli::Reader> {
 }
 
 impl<R: gimli::Reader> DebugSession<R> {
-    pub fn new(child: process::Child, dwarf: gimli::Dwarf<R>, loc_finder: LocFinder<R>, unwinder: Unwinder<R>, base_address: u64) -> Self {
+    pub fn new(
+        child: process::Child,
+        dwarf: gimli::Dwarf<R>,
+        loc_finder: LocFinder<R>,
+        type_storage: TypeStorage,
+        unwinder: Unwinder<R>,
+        base_address: u64,
+    ) -> Self {
         Self {
             state: Cell::new(SessionState::Started),
             dwarf,
             unwinder,
             loc_finder,
+            type_storage,
             child,
             base_address,
             breakpoints: HashMap::new(),
             traps: RefCell::new(HashMap::new()),
         }
+    }
+
+    pub fn get_type_storage(&self) -> &TypeStorage {
+        &self.type_storage
     }
 
     fn child_pid(&self) -> Pid {
@@ -410,8 +424,7 @@ impl<R: gimli::Reader> DebugSession<R> {
     }
 
     pub fn get_var_loc(&self, path: &str) -> Result<TypedValueLoc> {
-        let deref_count = path.chars().position(|c| c != '*').ok_or(DebuggerError::InvalidPath)?;
-        let path: Vec<&str> = path[deref_count..].split('.').collect();
+        let (operators, path) = Self::parse_path(path);
         let (&name, path) = path.split_first().ok_or(DebuggerError::InvalidPath)?;
         let ip = self.get_ip()?;
         let func = self.loc_finder.find_func_by_address(ip).ok_or(anyhow!("get current func"))?;
@@ -421,14 +434,14 @@ impl<R: gimli::Reader> DebugSession<R> {
         };
         let mut loc = self.get_value_loc_by_var_ref(&func, var_ref)?;
         loc = self.unwind_loc(loc, path)?;
-        loc = self.deref_loc(loc, deref_count)?;
+        loc = self.apply_operators(loc, &operators)?;
 
         Ok(loc)
     }
 
     pub fn get_var(&self, path: &str) -> Result<Var> {
         let loc = self.get_var_loc(path)?;
-        let size = self.get_type_size(loc.type_id)?;
+        let size = self.type_storage.get_type_size(loc.type_id)?;
         let buf = self.read_value_loc(loc.location, size)?;
         let value = Value::new(loc.type_id, buf);
         let name = Self::get_var_name(path)?;
@@ -451,12 +464,12 @@ impl<R: gimli::Reader> DebugSession<R> {
         }
         let location = pieces.remove(0).location;
 
-        Ok(TypedValueLoc::new(location.into(), var_ref.type_id))
+        Ok(TypedValueLoc::new(location.try_into()?, var_ref.type_id))
     }
 
     fn get_value_by_var_ref(&self, func: &str, var_ref: VarRef<R::Offset>) -> Result<Value> {
         let loc = self.get_value_loc_by_var_ref(func, var_ref)?;
-        let size = self.get_type_size(loc.type_id)?;
+        let size = self.type_storage.get_type_size(loc.type_id)?;
         let buf = self.read_value_loc(loc.location, size)?;
 
         Ok(Value::new(loc.type_id, buf))
@@ -467,7 +480,7 @@ impl<R: gimli::Reader> DebugSession<R> {
             return Ok(loc);
         }
 
-        match self.get_type(loc.type_id) {
+        match self.type_storage.get(loc.type_id)? {
             Type::Const(subtype_id) | Type::Typedef(_, subtype_id) => self.unwind_loc(loc.with_type(subtype_id), path),
             Type::Pointer(subtype_id) => {
                 let ptr = self.read_value_loc(loc.location, WORD_SIZE)?.get_u64_ne();
@@ -478,29 +491,44 @@ impl<R: gimli::Reader> DebugSession<R> {
                 self.unwind_loc(TypedValueLoc::new(ValueLoc::Address(ptr), subtype_id), path)
             }
             Type::Struct { fields, .. } => match fields.iter().find(|&field| field.name.as_ref() == path[0]) {
-                Some(field) => self.unwind_loc(TypedValueLoc::new(loc.location.with_offset(field.offset), field.type_id), &path[1..]),
+                Some(field) => self.unwind_loc(TypedValueLoc::new(loc.location.with_offset(field.offset)?, field.type_id), &path[1..]),
                 None => bail!(DebuggerError::InvalidPath),
             },
             _ => bail!(DebuggerError::InvalidPath),
         }
     }
 
-    fn deref_loc(&self, loc: TypedValueLoc, count: usize) -> Result<TypedValueLoc> {
-        if count == 0 {
-            return Ok(loc);
-        }
+    fn parse_path(path: &str) -> (Vec<Operator>, Vec<&str>) {
+        let operators: Vec<Operator> = path.chars().map_while(|c| Operator::try_from(c).ok()).collect();
+        let path = path[operators.len()..].split('.').collect();
 
-        match self.get_type(loc.type_id) {
-            Type::Pointer(subtype_id) => {
-                let ptr = self.read_value_loc(loc.location, WORD_SIZE)?.get_u64_ne();
-                if ptr == 0 {
-                    bail!(DebuggerError::InvalidPath);
-                }
+        (operators, path)
+    }
 
-                self.deref_loc(TypedValueLoc::new(ValueLoc::Address(ptr), subtype_id), count - 1)
-            }
-            Type::Const(subtype_id) | Type::Typedef(_, subtype_id) => self.deref_loc(loc.with_type(subtype_id), count),
-            _ => bail!(DebuggerError::InvalidPath),
+    fn apply_operators(&self, loc: TypedValueLoc, operators: &[Operator]) -> Result<TypedValueLoc> {
+        match operators.last() {
+            Some(operator) => match operator {
+                Operator::Ref => match loc.location {
+                    ValueLoc::Address(address) => {
+                        let ref_type_id = self.type_storage.get_type_ref(loc.type_id);
+                        self.apply_operators(TypedValueLoc::new(ValueLoc::Value(address), ref_type_id), &operators[..operators.len() - 1])
+                    }
+                    _ => bail!(DebuggerError::InvalidPath),
+                },
+                Operator::Deref => match self.type_storage.get(loc.type_id)? {
+                    Type::Pointer(subtype_id) => {
+                        let ptr = self.read_value_loc(loc.location, WORD_SIZE)?.get_u64_ne();
+                        if ptr == 0 {
+                            bail!(DebuggerError::InvalidPath);
+                        }
+
+                        self.apply_operators(TypedValueLoc::new(ValueLoc::Address(ptr), subtype_id), &operators[..operators.len() - 1])
+                    }
+                    Type::Const(subtype_id) | Type::Typedef(_, subtype_id) => self.apply_operators(loc.with_type(subtype_id), operators),
+                    _ => bail!(DebuggerError::InvalidPath),
+                },
+            },
+            None => Ok(loc),
         }
     }
 
@@ -513,18 +541,6 @@ impl<R: gimli::Reader> DebugSession<R> {
         let (prefix, path) = path.split_at(pos);
         let name = format!("{}{}", prefix, path.split('.').next_back().unwrap());
         Ok(Rc::from(name))
-    }
-
-    pub fn get_type(&self, type_id: TypeId) -> Type {
-        self.loc_finder.get_type(type_id)
-    }
-
-    pub fn get_type_size(&self, type_id: TypeId) -> Result<usize> {
-        self.loc_finder.get_type_size(type_id)
-    }
-
-    pub fn unwind_type(&self, type_id: TypeId) -> Type {
-        self.loc_finder.unwind_type(type_id)
     }
 
     fn eval_expr(&self, expr: gimli::Expression<R>, unit_ref: &gimli::UnitRef<R>, current_func: &str) -> Result<gimli::Evaluation<R>> {
@@ -660,7 +676,6 @@ impl<R: gimli::Reader> DebugSession<R> {
         let mut buf = vec![0; size];
 
         match loc {
-            ValueLoc::Empty => bail!("can't read loc {:?}", loc),
             ValueLoc::Register { register, offset } => {
                 if offset as usize + size > WORD_SIZE {
                     bail!("too many bytes to read")
@@ -669,6 +684,12 @@ impl<R: gimli::Reader> DebugSession<R> {
                 buf.copy_from_slice(&value.to_ne_bytes()[offset as usize..offset as usize + size]);
             }
             ValueLoc::Address(address) => self.read_memory(address, &mut buf)?,
+            ValueLoc::Value(value) => {
+                if size > WORD_SIZE {
+                    bail!("too many bytes to read")
+                }
+                buf.copy_from_slice(&value.to_ne_bytes()[..size]);
+            }
         };
 
         Ok(buf.into())
@@ -709,13 +730,11 @@ impl<R: gimli::Reader> DebugSession<R> {
                     u64::from_ne_bytes(buf)
                 };
 
-                self.set_register_value(register, new_value)?;
+                self.set_register_value(register, new_value)
             }
-            ValueLoc::Address(address) => self.write_memory(address, &value)?,
-            _ => bail!("can't write location {:?}", location),
+            ValueLoc::Address(address) => self.write_memory(address, &value),
+            _ => bail!(DebuggerError::InvalidLocation),
         }
-
-        Ok(())
     }
 
     fn write_memory(&self, addr: u64, buf: &[u8]) -> Result<()> {

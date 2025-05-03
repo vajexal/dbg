@@ -38,7 +38,8 @@ set_var = { "set" ~ ws ~ path ~ ("=" | (ws ~ "="? ~ " "*)) ~ value }
 quit = { "quit" | "q" }
 
 breakpoint_name = { (!(" " | "\t" | "\r" | "\n") ~ ANY)+ }
-path = @{ "*"* ~ name ~ ("." ~ name)* }
+path = @{ operator* ~ name ~ ("." ~ name)* }
+operator = { "*" | ("&" ~ !"&") }
 name = { (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 
 value = _{ number | boolean | string | null }

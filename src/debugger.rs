@@ -78,11 +78,11 @@ impl Debugger {
         };
         log::trace!("base address {:#x}", base_address);
 
-        let loc_finder = LocFinder::new(&dwarf, base_address)?;
+        let (loc_finder, type_storage) = LocFinder::make(&dwarf, base_address)?;
 
         wait::waitpid(Pid::from_raw(child.id() as libc::pid_t), None)?;
 
-        Ok(DebugSession::new(child, dwarf, loc_finder, unwinder, base_address))
+        Ok(DebugSession::new(child, dwarf, loc_finder, type_storage, unwinder, base_address))
     }
 
     fn get_unwinder<R, F>(object: &object::File, load_section: F) -> Result<Unwinder<R>>

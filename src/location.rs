@@ -1,31 +1,36 @@
-use crate::var::TypeId;
+use anyhow::{anyhow, Result};
+
+use crate::{error::DebuggerError, types::TypeId};
 
 #[derive(Debug, Clone)]
 pub enum ValueLoc {
-    Empty,
     Register { register: gimli::Register, offset: u16 },
     Address(u64),
+    Value(u64),
 }
 
 impl ValueLoc {
-    pub fn with_offset(self, delta: u16) -> Self {
+    pub fn with_offset(self, delta: u16) -> Result<Self> {
         match self {
-            ValueLoc::Empty => panic!("can't add offset to empty address"),
-            ValueLoc::Register { register, offset } => Self::Register {
+            ValueLoc::Register { register, offset } => Ok(Self::Register {
                 register,
                 offset: offset + delta,
-            },
-            ValueLoc::Address(address) => Self::Address(address + delta as u64),
+            }),
+            ValueLoc::Address(address) => Ok(Self::Address(address + delta as u64)),
+            ValueLoc::Value(_) => Err(anyhow!(DebuggerError::InvalidLocation)),
         }
     }
 }
 
-impl<R: gimli::Reader> From<gimli::Location<R>> for ValueLoc {
-    fn from(value: gimli::Location<R>) -> Self {
+impl<R: gimli::Reader> TryFrom<gimli::Location<R>> for ValueLoc {
+    type Error = DebuggerError;
+
+    fn try_from(value: gimli::Location<R>) -> Result<Self, Self::Error> {
         match value {
-            gimli::Location::Register { register } => ValueLoc::Register { register, offset: 0 },
-            gimli::Location::Address { address } => ValueLoc::Address(address),
-            _ => ValueLoc::Empty,
+            gimli::Location::Register { register } => Ok(ValueLoc::Register { register, offset: 0 }),
+            gimli::Location::Address { address } => Ok(ValueLoc::Address(address)),
+            gimli::Location::Value { value } => Ok(ValueLoc::Value(value.to_u64(!0u64).map_err(|_| DebuggerError::InvalidLocation)?)),
+            _ => Err(DebuggerError::InvalidLocation),
         }
     }
 }

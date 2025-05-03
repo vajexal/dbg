@@ -1,26 +1,9 @@
 use std::rc::Rc;
 
+use anyhow::anyhow;
 use bytes::Bytes;
 
-pub type TypeId = usize;
-
-#[derive(Debug, Clone)]
-pub enum Type {
-    Void,
-    Base { name: Rc<str>, encoding: gimli::DwAte, size: u16 },
-    Const(TypeId),
-    Pointer(TypeId),
-    String(TypeId),
-    Struct { name: Rc<str>, size: u16, fields: Rc<Vec<Field>> },
-    Typedef(Rc<str>, TypeId),
-}
-
-#[derive(Debug, Clone)]
-pub struct Field {
-    pub name: Rc<str>,
-    pub type_id: TypeId,
-    pub offset: u16,
-}
+use crate::types::TypeId;
 
 #[derive(Debug, Clone)]
 pub struct Value {
@@ -43,5 +26,23 @@ pub struct Var {
 impl Var {
     pub fn new<S: Into<Rc<str>>>(name: S, value: Value) -> Self {
         Self { name: name.into(), value }
+    }
+}
+
+#[derive(Debug)]
+pub enum Operator {
+    Ref,
+    Deref,
+}
+
+impl TryFrom<char> for Operator {
+    type Error = anyhow::Error;
+
+    fn try_from(value: char) -> Result<Self, Self::Error> {
+        match value {
+            '&' => Ok(Operator::Ref),
+            '*' => Ok(Operator::Deref),
+            _ => Err(anyhow!("invalid operator")),
+        }
     }
 }

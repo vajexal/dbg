@@ -4,7 +4,7 @@ use bytes::{BufMut, BytesMut};
 use crate::error::DebuggerError;
 use crate::printer::Printer;
 use crate::session::DebugSession;
-use crate::var::Type;
+use crate::types::Type;
 
 pub fn print_var<R: gimli::Reader>(session: &DebugSession<R>, name: Option<&str>) -> Result<()> {
     let printer = Printer::new(session);
@@ -28,7 +28,7 @@ pub fn set_var<R: gimli::Reader>(session: &DebugSession<R>, name: &str, value: &
     let loc = session.get_var_loc(name)?;
 
     let mut buf = BytesMut::new();
-    match session.unwind_type(loc.type_id) {
+    match session.get_type_storage().get(loc.type_id)? {
         Type::Base { encoding, size, .. } => match encoding {
             gimli::DW_ATE_boolean => {
                 let value = value.parse::<bool>().map_err(|_| DebuggerError::InvalidValue)?;

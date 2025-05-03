@@ -57,6 +57,7 @@ int main()
         ]
     )
 
+
 def test_print_nested_struct(debugger):
     debugger(
         code="""#include <stdio.h>

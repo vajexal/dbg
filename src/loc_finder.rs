@@ -5,9 +5,8 @@ use std::rc::Rc;
 
 use anyhow::{anyhow, bail, Result};
 
+use crate::types::{Field, Type, TypeId, TypeStorage};
 use crate::utils::ranges::Ranges;
-use crate::utils::WORD_SIZE;
-use crate::var::{Field, Type, TypeId};
 
 const MAIN_FUNC_NAME: &str = "main";
 
@@ -51,11 +50,10 @@ pub struct LocFinder<R: gimli::Reader> {
     main_unit: Option<Rc<str>>, // unit where main func is located
     func_variables: HashMap<Rc<str>, HashMap<Rc<str>, VarRef<R::Offset>>>,
     global_variables: HashMap<Rc<str>, VarRef<R::Offset>>,
-    types: Vec<Type>,
 }
 
 impl<R: gimli::Reader> LocFinder<R> {
-    pub fn new(dwarf: &gimli::Dwarf<R>, base_address: u64) -> Result<Self> {
+    pub fn make(dwarf: &gimli::Dwarf<R>, base_address: u64) -> Result<(Self, TypeStorage)> {
         let mut loc_finder = Self {
             base_address,
             funcs: HashMap::new(),
@@ -67,8 +65,8 @@ impl<R: gimli::Reader> LocFinder<R> {
             main_unit: None,
             func_variables: HashMap::new(),
             global_variables: HashMap::new(),
-            types: vec![Type::Void],
         };
+        let mut type_storage = TypeStorage::new();
 
         let mut units = dwarf.units();
 
@@ -77,14 +75,14 @@ impl<R: gimli::Reader> LocFinder<R> {
             let unit_ref = unit.unit_ref(dwarf);
 
             // todo worker pool
-            loc_finder.process_unit(&unit_ref)?;
+            loc_finder.process_unit(&unit_ref, &mut type_storage)?;
             loc_finder.find_lines(&unit_ref)?;
         }
 
-        Ok(loc_finder)
+        Ok((loc_finder, type_storage))
     }
 
-    fn process_unit(&mut self, unit_ref: &gimli::UnitRef<R>) -> Result<()> {
+    fn process_unit(&mut self, unit_ref: &gimli::UnitRef<R>, type_storage: &mut TypeStorage) -> Result<()> {
         // todo iterate all entries
         let mut tree = unit_ref.entries_tree(None)?;
         let root = tree.root()?;
@@ -99,8 +97,8 @@ impl<R: gimli::Reader> LocFinder<R> {
             let entry = child.entry();
 
             match entry.tag() {
-                gimli::DW_TAG_subprogram => self.process_subprogram(unit_ref, entry, &mut visited_types)?,
-                gimli::DW_TAG_variable => self.process_var(unit_ref, entry, None, &mut visited_types)?,
+                gimli::DW_TAG_subprogram => self.process_subprogram(unit_ref, entry, type_storage, &mut visited_types)?,
+                gimli::DW_TAG_variable => self.process_var(unit_ref, entry, None, type_storage, &mut visited_types)?,
                 _ => (),
             }
         }
@@ -132,6 +130,7 @@ impl<R: gimli::Reader> LocFinder<R> {
         &mut self,
         unit_ref: &gimli::UnitRef<R>,
         entry: &gimli::DebuggingInformationEntry<R>,
+        type_storage: &mut TypeStorage,
         visited_types: &mut HashMap<gimli::UnitOffset<R::Offset>, TypeId>,
     ) -> Result<()> {
         let name_attr = entry.attr_value(gimli::DW_AT_name)?.ok_or(anyhow!("get name attr value"))?;
@@ -176,7 +175,9 @@ impl<R: gimli::Reader> LocFinder<R> {
         while let Some(child) = children.next()? {
             let child_entry = child.entry();
             match child_entry.tag() {
-                gimli::DW_TAG_formal_parameter | gimli::DW_TAG_variable => self.process_var(unit_ref, child_entry, Some(name.clone()), visited_types)?,
+                gimli::DW_TAG_formal_parameter | gimli::DW_TAG_variable => {
+                    self.process_var(unit_ref, child_entry, Some(name.clone()), type_storage, visited_types)?
+                }
                 _ => (),
             }
         }
@@ -189,6 +190,7 @@ impl<R: gimli::Reader> LocFinder<R> {
         unit_ref: &gimli::UnitRef<R>,
         entry: &gimli::DebuggingInformationEntry<R>,
         func_name: Option<Rc<str>>,
+        type_storage: &mut TypeStorage,
         visited_types: &mut HashMap<gimli::UnitOffset<R::Offset>, TypeId>,
     ) -> Result<()> {
         let name_attr = match entry.attr_value(gimli::DW_AT_name)? {
@@ -201,7 +203,7 @@ impl<R: gimli::Reader> LocFinder<R> {
         let entry_offset = entry.offset();
         let entry_ref = EntryRef::new(unit_offset, entry_offset);
 
-        let type_id = self.process_entry_type(unit_ref, entry, visited_types)?;
+        let type_id = self.process_entry_type(unit_ref, entry, type_storage, visited_types)?;
         let var_ref = VarRef::new(entry_ref, type_id);
 
         match func_name {
@@ -216,13 +218,14 @@ impl<R: gimli::Reader> LocFinder<R> {
         &mut self,
         unit_ref: &gimli::UnitRef<R>,
         entry: &gimli::DebuggingInformationEntry<R>,
+        type_storage: &mut TypeStorage,
         visited_types: &mut HashMap<gimli::UnitOffset<R::Offset>, TypeId>,
     ) -> Result<TypeId> {
         match entry.attr_value(gimli::DW_AT_type)? {
             Some(value) => match value {
                 gimli::AttributeValue::UnitRef(offset) => {
                     let subtype_entry = unit_ref.entry(offset)?;
-                    self.process_type(unit_ref, &subtype_entry, visited_types)
+                    self.process_type(unit_ref, &subtype_entry, type_storage, visited_types)
                 }
                 _ => bail!("unknown type"),
             },
@@ -234,15 +237,15 @@ impl<R: gimli::Reader> LocFinder<R> {
         &mut self,
         unit_ref: &gimli::UnitRef<R>,
         entry: &gimli::DebuggingInformationEntry<R>,
+        type_storage: &mut TypeStorage,
         visited_types: &mut HashMap<gimli::UnitOffset<R::Offset>, TypeId>,
     ) -> Result<TypeId> {
-        let type_id = self.types.len();
-
-        match visited_types.entry(entry.offset()) {
+        let type_id = match visited_types.entry(entry.offset()) {
             Entry::Occupied(entry) => return Ok(*entry.get()),
             Entry::Vacant(entry) => {
+                let type_id = type_storage.add(Type::Void); // take slot
                 entry.insert(type_id);
-                self.types.push(Type::Void); // taking slot
+                type_id
             }
         };
 
@@ -268,16 +271,16 @@ impl<R: gimli::Reader> LocFinder<R> {
                 }
             }
             gimli::DW_TAG_const_type => {
-                let subtype_id = self.process_entry_type(unit_ref, entry, visited_types)?;
+                let subtype_id = self.process_entry_type(unit_ref, entry, type_storage, visited_types)?;
 
                 Type::Const(subtype_id)
             }
             gimli::DW_TAG_pointer_type => {
-                let subtype_id = self.process_entry_type(unit_ref, entry, visited_types)?;
+                let subtype_id = self.process_entry_type(unit_ref, entry, type_storage, visited_types)?;
                 let mut typ = Type::Pointer(subtype_id);
 
                 // check for c-string
-                let subtype = self.unwind_type(subtype_id);
+                let subtype = type_storage.unwind_type(subtype_id)?;
                 if let Type::Base { encoding, .. } = subtype {
                     if encoding == gimli::DW_ATE_signed_char {
                         typ = Type::String(subtype_id)
@@ -320,7 +323,7 @@ impl<R: gimli::Reader> LocFinder<R> {
                         .u16_value()
                         .ok_or(anyhow!("convert data member location to u8"))?;
 
-                    let member_type_id = self.process_entry_type(unit_ref, child_entry, visited_types)?;
+                    let member_type_id = self.process_entry_type(unit_ref, child_entry, type_storage, visited_types)?;
 
                     fields.push(Field {
                         name: member_name,
@@ -338,39 +341,16 @@ impl<R: gimli::Reader> LocFinder<R> {
             gimli::DW_TAG_typedef => {
                 let name_attr = entry.attr_value(gimli::DW_AT_name)?.ok_or(anyhow!("get name attr value"))?;
                 let name = Rc::from(unit_ref.attr_string(name_attr)?.to_string()?);
-                let subtype_id = self.process_entry_type(unit_ref, entry, visited_types)?;
+                let subtype_id = self.process_entry_type(unit_ref, entry, type_storage, visited_types)?;
 
                 Type::Typedef(name, subtype_id)
             }
             _ => bail!("unexpected tag type"),
         };
 
-        self.types[type_id] = typ;
+        type_storage.replace(type_id, typ)?;
 
         Ok(type_id)
-    }
-
-    pub fn get_type(&self, type_id: TypeId) -> Type {
-        self.types.get(type_id).cloned().unwrap()
-    }
-
-    pub fn get_type_size(&self, type_id: TypeId) -> Result<usize> {
-        match self.get_type(type_id) {
-            Type::Void => Err(anyhow!("void have no size")),
-            Type::Base { size, .. } => Ok(size as usize),
-            Type::Const(subtype_id) => self.get_type_size(subtype_id),
-            Type::Pointer(_) | Type::String(_) => Ok(WORD_SIZE),
-            Type::Struct { size, .. } => Ok(size as usize),
-            Type::Typedef(_, subtype_id) => self.get_type_size(subtype_id),
-        }
-    }
-
-    pub fn unwind_type(&self, type_id: TypeId) -> Type {
-        match self.get_type(type_id) {
-            Type::Const(subtype_id) => self.unwind_type(subtype_id),
-            Type::Typedef(_, subtype_id) => self.unwind_type(subtype_id),
-            typ => typ,
-        }
     }
 
     fn find_lines(&mut self, unit_ref: &gimli::UnitRef<R>) -> Result<()> {

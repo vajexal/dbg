@@ -41,6 +41,7 @@ int main()
         ]
     )
 
+
 def test_set_field(debugger):
     debugger(
         code="""#include <stdio.h>
@@ -64,6 +65,34 @@ int main()
             Step("p foo.a", "int a = 100"),
             Step("set foo.b 0xcc"),
             Step("p foo.b", "void* b = 0xcc"),
+            Step("q"),
+        ]
+    )
+
+
+def test_operators(debugger):
+    debugger(
+        code="""#include <stdio.h>
+
+int main()
+{
+    int x = 10;
+    int *y = &x;
+    printf("%d\\n", *y);
+    return 0;
+}
+""",
+        steps=[
+            Step("b 7", "breakpoint set"),
+            Step("r"),
+            Step("p &x", "int* &x = 0x"),
+            Step("p *&x", "int *&x = 10"),
+            Step("set *&x = 20"),
+            Step("p x", "int x = 20"),
+            Step("set &x = 30", "invalid location"),
+            Step("p x", "int x = 20"),
+            # Step("p **", "parser error"),
+            # Step("p &&x", "parser error"),
             Step("q"),
         ]
     )

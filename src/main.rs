@@ -9,6 +9,7 @@ mod location;
 mod printer;
 mod session;
 mod trap;
+mod types;
 mod unwinder;
 mod utils;
 mod var;
@@ -55,7 +56,7 @@ fn main() -> Result<()> {
                     None => return Err(e),
                 },
             },
-            Err(e) => eprintln!("parser error: {e}"),
+            Err(e) => eprintln!("parser error {e}"),
         };
     }
 }
