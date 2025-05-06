@@ -14,7 +14,8 @@ command = {
         step |
         print_var |
         set_var |
-        quit
+        quit |
+        help
     ) ~
     EOI
 }
@@ -36,6 +37,7 @@ step_out = { "step-out" }
 print_var = { ("print" | "p") ~ (ws ~ path)? }
 set_var = { "set" ~ ws ~ path ~ ("=" | (ws ~ "="? ~ " "*)) ~ value }
 quit = { "quit" | "q" }
+help = { "help" | "h" }
 
 breakpoint_name = { (!(" " | "\t" | "\r" | "\n") ~ ANY)+ }
 path = @{ operator* ~ name ~ ("." ~ name)* }

@@ -34,6 +34,7 @@ impl<'a, R: gimli::Reader> FSM<'a, R> {
                 Rule::disable_breakpoint => commands::breakpoints::disable(self.session, pair.into_inner().next().unwrap().as_str())?,
                 Rule::clear_breakpoints => commands::breakpoints::clear(self.session)?,
                 Rule::quit => commands::control::stop(self.session)?,
+                Rule::help => commands::help::help(),
                 _ => bail!(DebuggerError::InvalidCommand),
             },
             SessionState::Running => match rule {
@@ -53,10 +54,12 @@ impl<'a, R: gimli::Reader> FSM<'a, R> {
                     let mut inner_pairs = pair.into_inner();
                     commands::var::set_var(self.session, inner_pairs.next().unwrap().as_str(), inner_pairs.next().unwrap().as_str())?
                 }
+                Rule::help => commands::help::help(),
                 _ => bail!(DebuggerError::InvalidCommand),
             },
             SessionState::Exited => match rule {
                 Rule::quit => (),
+                Rule::help => commands::help::help(),
                 _ => bail!(DebuggerError::InvalidCommand),
             },
         }
