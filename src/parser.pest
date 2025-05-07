@@ -1,5 +1,6 @@
 command = {
     SOI ~ (
+        location |
         add_breakpoint |
         remove_breakpoint |
         list_breakpoints |
@@ -36,6 +37,7 @@ step_in = { "step-in" }
 step_out = { "step-out" }
 print_var = { ("print" | "p") ~ (ws ~ path)? }
 set_var = { "set" ~ ws ~ path ~ ("=" | (ws ~ "="? ~ " "*)) ~ value }
+location = { "location" | "loc" }
 quit = { "quit" | "q" }
 help = { "help" | "h" }
 

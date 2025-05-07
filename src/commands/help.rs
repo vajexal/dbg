@@ -16,6 +16,7 @@ step-in - run into function
 step-out - run out of current function
 print | p - print variable
 set - modify variable
+location | loc - print current location
 quit | q - quit the program
 "
     );

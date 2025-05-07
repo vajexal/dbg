@@ -1,5 +1,5 @@
-use crate::session::DebugSession;
-use anyhow::Result;
+use crate::{error::DebuggerError, session::DebugSession};
+use anyhow::{anyhow, Result};
 
 pub fn run<R: gimli::Reader>(session: &DebugSession<R>) -> Result<()> {
     session.run()?;
@@ -25,4 +25,10 @@ pub fn step_in<R: gimli::Reader>(session: &mut DebugSession<R>) -> Result<()> {
 
 pub fn step_out<R: gimli::Reader>(session: &mut DebugSession<R>) -> Result<()> {
     session.step_out()
+}
+
+pub fn location<R: gimli::Reader>(session: &DebugSession<R>) -> Result<()> {
+    let loc = session.get_current_line()?.ok_or(anyhow!(DebuggerError::InvalidLocation))?;
+    println!("{}", loc);
+    Ok(())
 }

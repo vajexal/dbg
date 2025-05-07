@@ -54,6 +54,7 @@ impl<'a, R: gimli::Reader> FSM<'a, R> {
                     let mut inner_pairs = pair.into_inner();
                     commands::var::set_var(self.session, inner_pairs.next().unwrap().as_str(), inner_pairs.next().unwrap().as_str())?
                 }
+                Rule::location => commands::control::location(self.session)?,
                 Rule::help => commands::help::help(),
                 _ => bail!(DebuggerError::InvalidCommand),
             },

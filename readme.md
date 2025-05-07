@@ -199,6 +199,15 @@ const char* s = "somebody once told me the world is gonna roll me"
 int x = 30
 ```
 
+#### location | loc
+
+print current location
+
+```
+> loc
+hello.c:5
+```
+
 #### quit | q
 
 quit the program

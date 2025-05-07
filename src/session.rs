@@ -262,7 +262,7 @@ impl<R: gimli::Reader> DebugSession<R> {
         Ok(regs.rip)
     }
 
-    fn get_current_line(&self) -> Result<Option<Rc<str>>> {
+    pub fn get_current_line(&self) -> Result<Option<Rc<str>>> {
         let ip = self.get_ip()?;
         let line = self.loc_finder.find_line(ip);
         Ok(line)
