@@ -481,7 +481,9 @@ impl<R: gimli::Reader> DebugSession<R> {
         }
 
         match self.type_storage.get(loc.type_id)? {
-            Type::Const(subtype_id) | Type::Volatile(subtype_id) | Type::Typedef(_, subtype_id) => self.unwind_loc(loc.with_type(subtype_id), path),
+            Type::Const(subtype_id) | Type::Volatile(subtype_id) | Type::Atomic(subtype_id) | Type::Typedef(_, subtype_id) => {
+                self.unwind_loc(loc.with_type(subtype_id), path)
+            }
             Type::Pointer(subtype_id) => {
                 let ptr = self.read_value_loc(loc.location, WORD_SIZE)?.get_u64_ne();
                 if ptr == 0 {
@@ -524,7 +526,7 @@ impl<R: gimli::Reader> DebugSession<R> {
 
                         self.apply_operators(TypedValueLoc::new(ValueLoc::Address(ptr), subtype_id), &operators[..operators.len() - 1])
                     }
-                    Type::Const(subtype_id) | Type::Volatile(subtype_id) | Type::Typedef(_, subtype_id) => {
+                    Type::Const(subtype_id) | Type::Volatile(subtype_id) | Type::Atomic(subtype_id) | Type::Typedef(_, subtype_id) => {
                         self.apply_operators(loc.with_type(subtype_id), operators)
                     }
                     _ => bail!(DebuggerError::InvalidPath),

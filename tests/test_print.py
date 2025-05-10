@@ -201,3 +201,25 @@ int main()
             Step("q"),
         ]
     )
+
+
+def test_atomic(debugger):
+    debugger(
+        code="""#include <stdio.h>
+
+_Atomic int c = 0;
+
+int main()
+{
+    printf("%d\\n", c);
+    return 0;
+}
+""",
+        steps=[
+            Step("b 7", "breakpoint set"),
+            Step("r"),
+            Step("p c", "_Atomic int c = 0"),
+            Step("c"),
+            Step("q"),
+        ]
+    )

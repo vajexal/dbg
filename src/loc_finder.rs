@@ -280,6 +280,11 @@ impl<R: gimli::Reader> LocFinder<R> {
 
                 Type::Volatile(subtype_id)
             }
+            gimli::DW_TAG_atomic_type => {
+                let subtype_id = self.process_entry_type(unit_ref, entry, type_storage, visited_types)?;
+
+                Type::Atomic(subtype_id)
+            }
             gimli::DW_TAG_pointer_type => {
                 let subtype_id = self.process_entry_type(unit_ref, entry, type_storage, visited_types)?;
 
