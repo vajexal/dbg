@@ -277,17 +277,19 @@ impl<R: gimli::Reader> LocFinder<R> {
             }
             gimli::DW_TAG_pointer_type => {
                 let subtype_id = self.process_entry_type(unit_ref, entry, type_storage, visited_types)?;
-                let mut typ = Type::Pointer(subtype_id);
 
-                // check for c-string
-                let subtype = type_storage.unwind_type(subtype_id)?;
-                if let Type::Base { encoding, .. } = subtype {
-                    if encoding == gimli::DW_ATE_signed_char {
-                        typ = Type::String(subtype_id)
+                match type_storage.unwind_type(subtype_id)? {
+                    Type::Base { encoding, .. } => {
+                        // check for c-string
+                        if encoding == gimli::DW_ATE_signed_char {
+                            Type::String(subtype_id)
+                        } else {
+                            Type::Pointer(subtype_id)
+                        }
                     }
+                    Type::FuncDef { .. } => Type::Func(subtype_id),
+                    _ => Type::Pointer(subtype_id),
                 }
-
-                typ
             }
             gimli::DW_TAG_structure_type => {
                 // struct could be anonymous
@@ -345,7 +347,28 @@ impl<R: gimli::Reader> LocFinder<R> {
 
                 Type::Typedef(name, subtype_id)
             }
-            _ => bail!("unexpected tag type"),
+            gimli::DW_TAG_subroutine_type => {
+                let name = match entry.attr_value(gimli::DW_AT_name)? {
+                    Some(value) => Some(Rc::from(unit_ref.attr_string(value)?.to_string()?)),
+                    None => None,
+                };
+                let return_type_id = self.process_entry_type(unit_ref, entry, type_storage, visited_types)?;
+                let mut args = Vec::new();
+
+                // process function arguments
+                let mut tree = unit_ref.entries_tree(Some(entry.offset()))?;
+                let root = tree.root()?;
+                let mut children = root.children();
+                while let Some(child) = children.next()? {
+                    let child_entry = child.entry();
+                    if child_entry.tag() == gimli::DW_TAG_formal_parameter {
+                        args.push(self.process_entry_type(unit_ref, child_entry, type_storage, visited_types)?);
+                    }
+                }
+
+                Type::FuncDef { name, return_type_id, args }
+            }
+            tag_type => bail!("unexpected tag type {}", tag_type),
         };
 
         type_storage.replace(type_id, typ)?;

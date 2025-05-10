@@ -543,6 +543,10 @@ impl<R: gimli::Reader> DebugSession<R> {
         Ok(Rc::from(name))
     }
 
+    pub fn find_func_by_address(&self, address: u64) -> Option<Rc<str>> {
+        self.loc_finder.find_func_by_address(address)
+    }
+
     fn eval_expr(&self, expr: gimli::Expression<R>, unit_ref: &gimli::UnitRef<R>, current_func: &str) -> Result<gimli::Evaluation<R>> {
         let mut eval = expr.evaluation(unit_ref.encoding());
         let mut result = eval.evaluate()?;

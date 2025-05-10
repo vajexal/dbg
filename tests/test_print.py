@@ -147,3 +147,34 @@ int main()
             Step("q"),
         ]
     )
+
+
+def test_print_func(debugger):
+    debugger(
+        code="""#include <stdio.h>
+
+typedef int (*Operation)(int, int);
+
+int add(int a, int b)
+{
+    return a + b;
+}
+
+int main()
+{
+    Operation op1 = add;
+    int (*op2)(int, int) = add;
+    printf("%d\\n", op2(5, op1(3, 4)));
+    return 0;
+}
+""",
+        steps=[
+            Step("b 14", "breakpoint set"),
+            Step("r"),
+            Step("p op1", "Operation op1 = add"),
+            Step("p op2", "int (int, int) op2 = add"),
+            Step("p *op1", "invalid path"),
+            Step("c"),
+            Step("q"),
+        ]
+    )

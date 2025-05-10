@@ -5,22 +5,40 @@ use thiserror::Error;
 use crate::utils::WORD_SIZE;
 
 #[derive(Debug, Error)]
-#[error("invalid type id {0}")]
-pub struct InvalidTypeIdError(TypeId);
+pub enum TypeError {
+    #[error("invalid type id {0}")]
+    InvalidTypeId(TypeId),
+    #[error("type {0} has no size")]
+    HasNoSize(TypeId),
+}
 
 pub type TypeId = usize;
 
-type Result<T> = std::result::Result<T, InvalidTypeIdError>;
+type Result<T> = std::result::Result<T, TypeError>;
 
 #[derive(Debug, Clone)]
 pub enum Type {
     Void,
-    Base { name: Rc<str>, encoding: gimli::DwAte, size: u16 },
+    Base {
+        name: Rc<str>,
+        encoding: gimli::DwAte,
+        size: u16,
+    },
     Const(TypeId),
     Pointer(TypeId),
     String(TypeId),
-    Struct { name: Rc<str>, size: u16, fields: Rc<Vec<Field>> },
+    Struct {
+        name: Rc<str>,
+        size: u16,
+        fields: Rc<Vec<Field>>,
+    },
     Typedef(Rc<str>, TypeId),
+    FuncDef {
+        name: Option<Rc<str>>,
+        return_type_id: TypeId,
+        args: Vec<TypeId>,
+    },
+    Func(TypeId), // pointer to a function
 }
 
 #[derive(Debug, Clone)]
@@ -54,25 +72,21 @@ impl TypeStorage {
             types[type_id] = typ;
             Ok(())
         } else {
-            Err(InvalidTypeIdError(type_id))
+            Err(TypeError::InvalidTypeId(type_id))
         }
     }
 
     pub fn get(&self, type_id: TypeId) -> Result<Type> {
-        self.types.borrow().get(type_id).cloned().ok_or(InvalidTypeIdError(type_id))
+        self.types.borrow().get(type_id).cloned().ok_or(TypeError::InvalidTypeId(type_id))
     }
 
     pub fn get_type_size(&self, type_id: TypeId) -> Result<usize> {
-        let size = match self.get(type_id)? {
-            Type::Void => 0,
-            Type::Base { size, .. } => size as usize,
-            Type::Const(subtype_id) => self.get_type_size(subtype_id)?,
-            Type::Pointer(_) | Type::String(_) => WORD_SIZE,
-            Type::Struct { size, .. } => size as usize,
-            Type::Typedef(_, subtype_id) => self.get_type_size(subtype_id)?,
-        };
-
-        Ok(size)
+        match self.get(type_id)? {
+            Type::Void | Type::FuncDef { .. } => Err(TypeError::HasNoSize(type_id)),
+            Type::Base { size, .. } | Type::Struct { size, .. } => Ok(size as usize),
+            Type::Const(subtype_id) | Type::Typedef(_, subtype_id) => self.get_type_size(subtype_id),
+            Type::Pointer(_) | Type::String(_) | Type::Func(_) => Ok(WORD_SIZE),
+        }
     }
 
     pub fn unwind_type(&self, type_id: TypeId) -> Result<Type> {

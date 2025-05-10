@@ -49,6 +49,22 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
             }
             Type::Struct { name, .. } => write!(f, "{}", name)?,
             Type::Typedef(name, _) => write!(f, "{}", name)?,
+            Type::FuncDef { name, return_type_id, args } => {
+                self.print_type(f, return_type_id)?;
+                write!(f, " ")?;
+                if let Some(name) = name {
+                    write!(f, "{}", name)?;
+                }
+                write!(f, "(")?;
+                for (i, arg_type_id) in args.iter().copied().enumerate() {
+                    if i != 0 {
+                        write!(f, ", ")?;
+                    }
+                    self.print_type(f, arg_type_id)?;
+                }
+                write!(f, ")")?;
+            }
+            Type::Func(subtype_id) => self.print_type(f, subtype_id)?,
         };
 
         Ok(())
@@ -112,6 +128,18 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                 write!(f, " }}")?;
             }
             Type::Typedef(_, subtype_id) => self.print_value(f, Value::new(subtype_id, value.buf))?,
+            Type::FuncDef { .. } => bail!("can't print func value"),
+            Type::Func(_) => {
+                let ptr = value.buf.get_u64_ne();
+                if ptr == 0 {
+                    return Ok(write!(f, "null")?);
+                }
+
+                match self.session.find_func_by_address(ptr) {
+                    Some(func_name) => write!(f, "{}", func_name)?,
+                    None => write!(f, "{:#x}", ptr)?,
+                }
+            }
         };
 
         Ok(())
