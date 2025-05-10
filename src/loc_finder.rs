@@ -275,6 +275,11 @@ impl<R: gimli::Reader> LocFinder<R> {
 
                 Type::Const(subtype_id)
             }
+            gimli::DW_TAG_volatile_type => {
+                let subtype_id = self.process_entry_type(unit_ref, entry, type_storage, visited_types)?;
+
+                Type::Volatile(subtype_id)
+            }
             gimli::DW_TAG_pointer_type => {
                 let subtype_id = self.process_entry_type(unit_ref, entry, type_storage, visited_types)?;
 
@@ -362,7 +367,8 @@ impl<R: gimli::Reader> LocFinder<R> {
                 while let Some(child) = children.next()? {
                     let child_entry = child.entry();
                     if child_entry.tag() == gimli::DW_TAG_formal_parameter {
-                        args.push(self.process_entry_type(unit_ref, child_entry, type_storage, visited_types)?);
+                        let arg_type_id = self.process_entry_type(unit_ref, child_entry, type_storage, visited_types)?;
+                        args.push(arg_type_id);
                     }
                 }
 

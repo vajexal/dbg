@@ -25,6 +25,7 @@ pub enum Type {
         size: u16,
     },
     Const(TypeId),
+    Volatile(TypeId),
     Pointer(TypeId),
     String(TypeId),
     Struct {
@@ -84,15 +85,14 @@ impl TypeStorage {
         match self.get(type_id)? {
             Type::Void | Type::FuncDef { .. } => Err(TypeError::HasNoSize(type_id)),
             Type::Base { size, .. } | Type::Struct { size, .. } => Ok(size as usize),
-            Type::Const(subtype_id) | Type::Typedef(_, subtype_id) => self.get_type_size(subtype_id),
+            Type::Const(subtype_id) | Type::Volatile(subtype_id) | Type::Typedef(_, subtype_id) => self.get_type_size(subtype_id),
             Type::Pointer(_) | Type::String(_) | Type::Func(_) => Ok(WORD_SIZE),
         }
     }
 
     pub fn unwind_type(&self, type_id: TypeId) -> Result<Type> {
         match self.get(type_id)? {
-            Type::Const(subtype_id) => self.unwind_type(subtype_id),
-            Type::Typedef(_, subtype_id) => self.unwind_type(subtype_id),
+            Type::Const(subtype_id) | Type::Volatile(subtype_id) | Type::Typedef(_, subtype_id) => self.unwind_type(subtype_id),
             typ => Ok(typ),
         }
     }

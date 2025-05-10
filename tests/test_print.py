@@ -178,3 +178,26 @@ int main()
             Step("q"),
         ]
     )
+
+
+def test_volatile(debugger):
+    debugger(
+        code="""#include <stdio.h>
+#include <stdbool.h>
+
+volatile bool flag = false;
+
+int main()
+{
+    printf("%s\\n", flag ? "true" : "false");
+    return 0;
+}
+""",
+        steps=[
+            Step("b 8", "breakpoint set"),
+            Step("r"),
+            Step("p flag", "volatile bool flag = false"),
+            Step("c"),
+            Step("q"),
+        ]
+    )

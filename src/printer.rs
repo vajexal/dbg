@@ -43,6 +43,10 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                 write!(f, "const ")?;
                 self.print_type(f, subtype_id)?;
             }
+            Type::Volatile(subtype_id) => {
+                write!(f, "volatile ")?;
+                self.print_type(f, subtype_id)?;
+            }
             Type::Pointer(subtype_id) | Type::String(subtype_id) => {
                 self.print_type(f, subtype_id)?;
                 write!(f, "*")?;
@@ -100,7 +104,7 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                     _ => bail!("unsupported encoding"),
                 };
             }
-            Type::Const(subtype_id) => self.print_value(f, Value::new(subtype_id, value.buf))?,
+            Type::Const(subtype_id) | Type::Volatile(subtype_id) | Type::Typedef(_, subtype_id) => self.print_value(f, Value::new(subtype_id, value.buf))?,
             Type::Pointer(_) => {
                 let ptr = value.buf.get_u64_ne();
                 if ptr == 0 {
@@ -127,7 +131,6 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
 
                 write!(f, " }}")?;
             }
-            Type::Typedef(_, subtype_id) => self.print_value(f, Value::new(subtype_id, value.buf))?,
             Type::FuncDef { .. } => bail!("can't print func value"),
             Type::Func(_) => {
                 let ptr = value.buf.get_u64_ne();
