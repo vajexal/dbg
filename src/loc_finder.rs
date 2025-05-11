@@ -6,7 +6,7 @@ use std::rc::Rc;
 use anyhow::{anyhow, bail, Result};
 use gimli::DW_AT_type;
 
-use crate::types::{EnumVariant, Field, Type, TypeId, TypeStorage};
+use crate::types::{EnumVariant, Field, Type, TypeId, TypeStorage, UnionField};
 use crate::utils::ranges::Ranges;
 
 const MAIN_FUNC_NAME: &str = "main";
@@ -255,17 +255,9 @@ impl<R: gimli::Reader> LocFinder<R> {
                     gimli::AttributeValue::Encoding(encoding) => encoding,
                     _ => bail!("unexpected encoding attr value"),
                 };
-                let byte_size = entry
-                    .attr_value(gimli::DW_AT_byte_size)?
-                    .ok_or(anyhow!("get byte size value"))?
-                    .u16_value()
-                    .ok_or(anyhow!("convert byte size to u16"))?;
+                let size = Self::get_byte_size(entry)?;
 
-                Type::Base {
-                    name,
-                    encoding,
-                    size: byte_size,
-                }
+                Type::Base { name, encoding, size }
             }
             gimli::DW_TAG_const_type => {
                 let subtype_id = self.process_entry_type(unit_ref, entry, type_storage, visited_types)?;
@@ -300,12 +292,7 @@ impl<R: gimli::Reader> LocFinder<R> {
             }
             gimli::DW_TAG_structure_type => {
                 let name = Self::get_optional_name(unit_ref, entry)?;
-
-                let byte_size = entry
-                    .attr_value(gimli::DW_AT_byte_size)?
-                    .ok_or(anyhow!("get byte size value"))?
-                    .u16_value()
-                    .ok_or(anyhow!("convert byte size to u16"))?;
+                let size = Self::get_byte_size(entry)?;
 
                 let fields = Self::map_subtree(unit_ref, entry, gimli::DW_TAG_member, |child_entry| {
                     let member_name = Self::get_name(unit_ref, child_entry)?;
@@ -328,7 +315,7 @@ impl<R: gimli::Reader> LocFinder<R> {
 
                 Type::Struct {
                     name,
-                    size: byte_size,
+                    size,
                     fields: Rc::from(fields),
                 }
             }
@@ -348,13 +335,9 @@ impl<R: gimli::Reader> LocFinder<R> {
                             gimli::AttributeValue::Encoding(encoding) => encoding,
                             _ => bail!("unexpected encoding attr value"),
                         };
-                        let byte_size = entry
-                            .attr_value(gimli::DW_AT_byte_size)?
-                            .ok_or(anyhow!("get byte size value"))?
-                            .u16_value()
-                            .ok_or(anyhow!("convert byte size to u16"))?;
+                        let size = Self::get_byte_size(entry)?;
 
-                        (encoding, byte_size)
+                        (encoding, size)
                     }
                 };
 
@@ -377,6 +360,23 @@ impl<R: gimli::Reader> LocFinder<R> {
                     encoding,
                     size,
                     variants: Rc::new(variants),
+                }
+            }
+            gimli::DW_TAG_union_type => {
+                let name = Self::get_optional_name(unit_ref, entry)?;
+                let size = Self::get_byte_size(entry)?;
+
+                let fields = Self::map_subtree(unit_ref, entry, gimli::DW_TAG_member, |child_entry| {
+                    let name = Self::get_name(unit_ref, child_entry)?;
+                    let type_id = self.process_entry_type(unit_ref, child_entry, type_storage, visited_types)?;
+
+                    Ok(UnionField { name, type_id })
+                })?;
+
+                Type::Union {
+                    name,
+                    size,
+                    fields: Rc::new(fields),
                 }
             }
             gimli::DW_TAG_typedef => {
@@ -418,6 +418,14 @@ impl<R: gimli::Reader> LocFinder<R> {
             Some(value) => Ok(Some(Rc::from(unit_ref.attr_string(value)?.to_string()?))),
             None => Ok(None),
         }
+    }
+
+    fn get_byte_size(entry: &gimli::DebuggingInformationEntry<R>) -> Result<u16> {
+        entry
+            .attr_value(gimli::DW_AT_byte_size)?
+            .ok_or(anyhow!("get byte size value"))?
+            .u16_value()
+            .ok_or(anyhow!("convert byte size to u16"))
     }
 
     fn map_subtree<F, T>(unit_ref: &gimli::UnitRef<R>, entry: &gimli::DebuggingInformationEntry<R>, entry_tag: gimli::DwTag, mut f: F) -> Result<Vec<T>>

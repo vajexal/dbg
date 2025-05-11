@@ -86,6 +86,22 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                     write!(f, " }}")?;
                 }
             },
+            Type::Union { name, fields, .. } => match name {
+                Some(name) => write!(f, "union {}", name)?,
+                None => {
+                    write!(f, "union {{ ")?;
+
+                    for (i, field) in fields.iter().enumerate() {
+                        if i != 0 {
+                            write!(f, ", ")?;
+                        }
+                        self.print_type(f, field.type_id)?; // anonymous union can't make recursion
+                        write!(f, " {}", field.name)?;
+                    }
+
+                    write!(f, " }}")?;
+                }
+            },
             Type::Typedef(name, _) => write!(f, "{}", name)?,
             Type::FuncDef { name, return_type_id, args } => {
                 self.print_type(f, return_type_id)?;
@@ -112,7 +128,7 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
         let typ = self.session.get_type_storage().get(value.type_id)?;
 
         match typ {
-            Type::Void => bail!(DebuggerError::InvalidPath),
+            Type::Void | Type::Union { .. } | Type::FuncDef { .. } => bail!(DebuggerError::InvalidPath),
             Type::Base { encoding, size, .. } => {
                 match encoding {
                     gimli::DW_ATE_boolean => write!(f, "{}", value.buf.get_u8() != 0)?,
@@ -191,7 +207,6 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                     None => write!(f, "{}", enum_value)?,
                 };
             }
-            Type::FuncDef { .. } => bail!("can't print func value"),
             Type::Func(_) => {
                 let ptr = value.buf.get_u64_ne();
                 if ptr == 0 {

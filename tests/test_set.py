@@ -138,3 +138,36 @@ int main()
             Step("q"),
         ]
     )
+
+
+def test_union(debugger):
+    debugger(
+        code="""#include <stdio.h>
+
+union Data
+{
+    int i;
+    float f;
+};
+
+int main()
+{
+    union Data data;
+    data.i = 10;
+    printf("%d\\n", data.i);
+    return 0;
+}
+""",
+        steps=[
+            Step("b 13", "breakpoint set"),
+            Step("r"),
+            Step("p data", "invalid path"),
+            Step("p data.i", "int i = 10"),
+            Step("p data.s", "invalid path"),
+            Step("set data = 20", "invalid path"),
+            Step("set data.f = 3.14"),
+            Step("p data.f", "float f = 3.14"),
+            Step("c"),
+            Step("q"),
+        ]
+    )

@@ -498,9 +498,13 @@ impl<R: gimli::Reader> DebugSession<R> {
             }
             Type::Struct { fields, .. } => match fields.iter().find(|&field| field.name.as_ref() == path[0]) {
                 Some(field) => self.unwind_loc(TypedValueLoc::new(loc.location.with_offset(field.offset)?, field.type_id), &path[1..]),
-                None => bail!(DebuggerError::InvalidPath),
+                None => Err(anyhow!(DebuggerError::InvalidPath)),
             },
-            _ => bail!(DebuggerError::InvalidPath),
+            Type::Union { fields, .. } => match fields.iter().find(|&field| field.name.as_ref() == path[0]) {
+                Some(field) => self.unwind_loc(loc.with_type(field.type_id), &path[1..]),
+                None => Err(anyhow!(DebuggerError::InvalidPath)),
+            },
+            _ => Err(anyhow!(DebuggerError::InvalidPath)),
         }
     }
 
@@ -519,7 +523,7 @@ impl<R: gimli::Reader> DebugSession<R> {
                         let ref_type_id = self.type_storage.get_type_ref(loc.type_id);
                         self.apply_operators(TypedValueLoc::new(ValueLoc::Value(address), ref_type_id), &operators[..operators.len() - 1])
                     }
-                    _ => bail!(DebuggerError::InvalidPath),
+                    _ => Err(anyhow!(DebuggerError::InvalidPath)),
                 },
                 Operator::Deref => match self.type_storage.get(loc.type_id)? {
                     Type::Pointer(subtype_id) => {
@@ -533,7 +537,7 @@ impl<R: gimli::Reader> DebugSession<R> {
                     Type::Const(subtype_id) | Type::Volatile(subtype_id) | Type::Atomic(subtype_id) | Type::Typedef(_, subtype_id) => {
                         self.apply_operators(loc.with_type(subtype_id), operators)
                     }
-                    _ => bail!(DebuggerError::InvalidPath),
+                    _ => Err(anyhow!(DebuggerError::InvalidPath)),
                 },
             },
             None => Ok(loc),

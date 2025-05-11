@@ -40,6 +40,11 @@ pub enum Type {
         size: u16,
         variants: Rc<Vec<EnumVariant>>,
     },
+    Union {
+        name: Option<Rc<str>>,
+        size: u16,
+        fields: Rc<Vec<UnionField>>,
+    },
     Typedef(Rc<str>, TypeId),
     FuncDef {
         name: Option<Rc<str>>,
@@ -60,6 +65,12 @@ pub struct Field {
 pub struct EnumVariant {
     pub name: Rc<str>,
     pub value: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct UnionField {
+    pub name: Rc<str>,
+    pub type_id: TypeId,
 }
 
 #[derive(Debug)]
@@ -97,7 +108,7 @@ impl TypeStorage {
     pub fn get_type_size(&self, type_id: TypeId) -> Result<usize> {
         match self.get(type_id)? {
             Type::Void | Type::FuncDef { .. } => Err(TypeError::HasNoSize(type_id)),
-            Type::Base { size, .. } | Type::Struct { size, .. } | Type::Enum { size, .. } => Ok(size as usize),
+            Type::Base { size, .. } | Type::Struct { size, .. } | Type::Enum { size, .. } | Type::Union { size, .. } => Ok(size as usize),
             Type::Const(subtype_id) | Type::Volatile(subtype_id) | Type::Atomic(subtype_id) | Type::Typedef(_, subtype_id) => self.get_type_size(subtype_id),
             Type::Pointer(_) | Type::String(_) | Type::Func(_) => Ok(WORD_SIZE),
         }
