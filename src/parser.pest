@@ -46,7 +46,7 @@ path = @{ operator* ~ name ~ ("." ~ name)* }
 operator = { "*" | ("&" ~ !"&") }
 name = { (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 
-value = _{ number | boolean | string | null }
+value = _{ number | boolean | string | enum_variant | null }
 number = @{ hex | dec }
 hex = @{ "0x" ~ ASCII_HEX_DIGIT{1, 8} }
 dec = @{
@@ -63,4 +63,5 @@ char = {
     | "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t")
     | "\\" ~ ("u" ~ ASCII_HEX_DIGIT{4})
 }
+enum_variant = { name }
 null = { "null" }

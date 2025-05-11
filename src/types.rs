@@ -30,15 +30,21 @@ pub enum Type {
     Pointer(TypeId),
     String(TypeId),
     Struct {
-        name: Rc<str>,
+        name: Option<Rc<str>>,
         size: u16,
         fields: Rc<Vec<Field>>,
+    },
+    Enum {
+        name: Option<Rc<str>>,
+        encoding: gimli::DwAte,
+        size: u16,
+        variants: Rc<Vec<EnumVariant>>,
     },
     Typedef(Rc<str>, TypeId),
     FuncDef {
         name: Option<Rc<str>>,
         return_type_id: TypeId,
-        args: Vec<TypeId>,
+        args: Rc<Vec<TypeId>>,
     },
     Func(TypeId), // pointer to a function
 }
@@ -48,6 +54,12 @@ pub struct Field {
     pub name: Rc<str>,
     pub type_id: TypeId,
     pub offset: u16,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnumVariant {
+    pub name: Rc<str>,
+    pub value: i64,
 }
 
 #[derive(Debug)]
@@ -85,7 +97,7 @@ impl TypeStorage {
     pub fn get_type_size(&self, type_id: TypeId) -> Result<usize> {
         match self.get(type_id)? {
             Type::Void | Type::FuncDef { .. } => Err(TypeError::HasNoSize(type_id)),
-            Type::Base { size, .. } | Type::Struct { size, .. } => Ok(size as usize),
+            Type::Base { size, .. } | Type::Struct { size, .. } | Type::Enum { size, .. } => Ok(size as usize),
             Type::Const(subtype_id) | Type::Volatile(subtype_id) | Type::Atomic(subtype_id) | Type::Typedef(_, subtype_id) => self.get_type_size(subtype_id),
             Type::Pointer(_) | Type::String(_) | Type::Func(_) => Ok(WORD_SIZE),
         }

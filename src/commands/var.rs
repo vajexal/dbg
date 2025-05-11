@@ -68,6 +68,31 @@ pub fn set_var<R: gimli::Reader>(session: &DebugSession<R>, name: &str, value: &
             let new_str_addr = session.alloc_c_string(&new_str)?;
             buf.put_u64_ne(new_str_addr);
         }
+        Type::Enum { encoding, size, variants, .. } => {
+            let enum_value = variants
+                .iter()
+                .find(|&variant| variant.name.as_ref() == value)
+                .map(|variant| variant.value)
+                .ok_or(DebuggerError::InvalidValue)?;
+
+            match encoding {
+                gimli::DW_ATE_signed => match size {
+                    1 => buf.put_i8(enum_value as i8),
+                    2 => buf.put_i16_ne(enum_value as i16),
+                    4 => buf.put_i32_ne(enum_value as i32),
+                    8 => buf.put_i64_ne(enum_value),
+                    _ => bail!("invalid enum byte size"),
+                },
+                gimli::DW_ATE_unsigned => match size {
+                    1 => buf.put_u8(enum_value as u8),
+                    2 => buf.put_u16_ne(enum_value as u16),
+                    4 => buf.put_u32_ne(enum_value as u32),
+                    8 => buf.put_u64_ne(enum_value as u64),
+                    _ => bail!("invalid enum byte size"),
+                },
+                _ => bail!("invalid enum encoding"),
+            };
+        }
         _ => bail!(DebuggerError::InvalidPath),
     }
 

@@ -71,6 +71,10 @@ impl<R: gimli::Reader> DebugSession<R> {
         &self.type_storage
     }
 
+    pub fn get_loc_finder(&self) -> &LocFinder<R> {
+        &self.loc_finder
+    }
+
     fn child_pid(&self) -> Pid {
         Pid::from_raw(self.child.id() as libc::pid_t)
     }
@@ -545,10 +549,6 @@ impl<R: gimli::Reader> DebugSession<R> {
         let (prefix, path) = path.split_at(pos);
         let name = format!("{}{}", prefix, path.split('.').next_back().unwrap());
         Ok(Rc::from(name))
-    }
-
-    pub fn find_func_by_address(&self, address: u64) -> Option<Rc<str>> {
-        self.loc_finder.find_func_by_address(address)
     }
 
     fn eval_expr(&self, expr: gimli::Expression<R>, unit_ref: &gimli::UnitRef<R>, current_func: &str) -> Result<gimli::Evaluation<R>> {

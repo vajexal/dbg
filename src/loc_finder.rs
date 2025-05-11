@@ -4,8 +4,9 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use anyhow::{anyhow, bail, Result};
+use gimli::DW_AT_type;
 
-use crate::types::{Field, Type, TypeId, TypeStorage};
+use crate::types::{EnumVariant, Field, Type, TypeId, TypeStorage};
 use crate::utils::ranges::Ranges;
 
 const MAIN_FUNC_NAME: &str = "main";
@@ -107,8 +108,7 @@ impl<R: gimli::Reader> LocFinder<R> {
     }
 
     fn process_compile_unit(&mut self, unit_ref: &gimli::UnitRef<R>, entry: &gimli::DebuggingInformationEntry<R>) -> Result<()> {
-        let name_attr = entry.attr_value(gimli::DW_AT_name)?.ok_or(anyhow!("get name attr value"))?;
-        let name: Rc<str> = Rc::from(unit_ref.attr_string(name_attr)?.to_string()?);
+        let name = Self::get_name(unit_ref, entry)?;
 
         let low_pc_attr = entry.attr_value(gimli::DW_AT_low_pc)?.ok_or(anyhow!("get low_pc attr"))?;
         let low_pc = self.base_address + unit_ref.attr_address(low_pc_attr)?.ok_or(anyhow!("get low_pc value"))?;
@@ -133,8 +133,7 @@ impl<R: gimli::Reader> LocFinder<R> {
         type_storage: &mut TypeStorage,
         visited_types: &mut HashMap<gimli::UnitOffset<R::Offset>, TypeId>,
     ) -> Result<()> {
-        let name_attr = entry.attr_value(gimli::DW_AT_name)?.ok_or(anyhow!("get name attr value"))?;
-        let name: Rc<str> = Rc::from(unit_ref.attr_string(name_attr)?.to_string()?);
+        let name = Self::get_name(unit_ref, entry)?;
 
         let unit_offset = unit_ref.header.offset().as_debug_info_offset().ok_or(anyhow!("can't get debug_info offest"))?;
         let entry_offset = entry.offset();
@@ -193,12 +192,11 @@ impl<R: gimli::Reader> LocFinder<R> {
         type_storage: &mut TypeStorage,
         visited_types: &mut HashMap<gimli::UnitOffset<R::Offset>, TypeId>,
     ) -> Result<()> {
-        let name_attr = match entry.attr_value(gimli::DW_AT_name)? {
-            Some(value) => value,
+        let name = match Self::get_optional_name(unit_ref, entry)? {
+            Some(name) => name,
             None => return Ok(()),
         };
 
-        let name: Rc<str> = Rc::from(unit_ref.attr_string(name_attr)?.to_string()?);
         let unit_offset = unit_ref.header.offset().as_debug_info_offset().ok_or(anyhow!("can't get debug_info offest"))?;
         let entry_offset = entry.offset();
         let entry_ref = EntryRef::new(unit_offset, entry_offset);
@@ -251,8 +249,7 @@ impl<R: gimli::Reader> LocFinder<R> {
 
         let typ = match entry.tag() {
             gimli::DW_TAG_base_type => {
-                let name_attr = entry.attr_value(gimli::DW_AT_name)?.ok_or(anyhow!("get name attr value"))?;
-                let name = Rc::from(unit_ref.attr_string(name_attr)?.to_string()?);
+                let name = Self::get_name(unit_ref, entry)?;
                 let encoding_attr = entry.attr_value(gimli::DW_AT_encoding)?.ok_or(anyhow!("get encoding value"))?;
                 let encoding = match encoding_attr {
                     gimli::AttributeValue::Encoding(encoding) => encoding,
@@ -262,7 +259,7 @@ impl<R: gimli::Reader> LocFinder<R> {
                     .attr_value(gimli::DW_AT_byte_size)?
                     .ok_or(anyhow!("get byte size value"))?
                     .u16_value()
-                    .ok_or(anyhow!("convert byte size to u8"))?;
+                    .ok_or(anyhow!("convert byte size to u16"))?;
 
                 Type::Base {
                     name,
@@ -302,47 +299,32 @@ impl<R: gimli::Reader> LocFinder<R> {
                 }
             }
             gimli::DW_TAG_structure_type => {
-                // struct could be anonymous
-                let name = match entry.attr_value(gimli::DW_AT_name)? {
-                    Some(value) => Rc::from(unit_ref.attr_string(value)?.to_string()?),
-                    None => Rc::from(""),
-                };
+                let name = Self::get_optional_name(unit_ref, entry)?;
 
                 let byte_size = entry
                     .attr_value(gimli::DW_AT_byte_size)?
                     .ok_or(anyhow!("get byte size value"))?
                     .u16_value()
-                    .ok_or(anyhow!("convert byte size to u8"))?;
+                    .ok_or(anyhow!("convert byte size to u16"))?;
 
-                let mut fields = Vec::new();
-
-                let mut tree = unit_ref.entries_tree(Some(entry.offset()))?;
-                let root = tree.root()?;
-                let mut children = root.children();
-                while let Some(child) = children.next()? {
-                    let child_entry = child.entry();
-                    if child_entry.tag() != gimli::DW_TAG_member {
-                        continue;
-                    }
-
-                    let member_name_attr = child_entry.attr_value(gimli::DW_AT_name)?.ok_or(anyhow!("get name attr value"))?;
-                    let member_name = Rc::from(unit_ref.attr_string(member_name_attr)?.to_string()?);
+                let fields = Self::map_subtree(unit_ref, entry, gimli::DW_TAG_member, |child_entry| {
+                    let member_name = Self::get_name(unit_ref, child_entry)?;
 
                     // todo location
                     let member_location = child_entry
                         .attr_value(gimli::DW_AT_data_member_location)?
                         .ok_or(anyhow!("get data member location attr value"))?
                         .u16_value()
-                        .ok_or(anyhow!("convert data member location to u8"))?;
+                        .ok_or(anyhow!("convert data member location to u16"))?;
 
                     let member_type_id = self.process_entry_type(unit_ref, child_entry, type_storage, visited_types)?;
 
-                    fields.push(Field {
+                    Ok(Field {
                         name: member_name,
                         type_id: member_type_id,
                         offset: member_location,
-                    });
-                }
+                    })
+                })?;
 
                 Type::Struct {
                     name,
@@ -350,34 +332,72 @@ impl<R: gimli::Reader> LocFinder<R> {
                     fields: Rc::from(fields),
                 }
             }
+            gimli::DW_TAG_enumeration_type => {
+                let name = Self::get_optional_name(unit_ref, entry)?;
+                let (encoding, size) = match entry.attr_value(DW_AT_type)? {
+                    Some(_) => {
+                        let subtype_id = self.process_entry_type(unit_ref, entry, type_storage, visited_types)?;
+                        match type_storage.get(subtype_id)? {
+                            Type::Base { encoding, size, .. } => (encoding, size),
+                            _ => bail!("invalid enum subtype"),
+                        }
+                    }
+                    None => {
+                        let encoding_attr = entry.attr_value(gimli::DW_AT_encoding)?.ok_or(anyhow!("get encoding value"))?;
+                        let encoding = match encoding_attr {
+                            gimli::AttributeValue::Encoding(encoding) => encoding,
+                            _ => bail!("unexpected encoding attr value"),
+                        };
+                        let byte_size = entry
+                            .attr_value(gimli::DW_AT_byte_size)?
+                            .ok_or(anyhow!("get byte size value"))?
+                            .u16_value()
+                            .ok_or(anyhow!("convert byte size to u16"))?;
+
+                        (encoding, byte_size)
+                    }
+                };
+
+                let variants = Self::map_subtree(unit_ref, entry, gimli::DW_TAG_enumerator, |child_entry| {
+                    let variant_name = Self::get_name(unit_ref, child_entry)?;
+                    let variant_value = child_entry
+                        .attr_value(gimli::DW_AT_const_value)?
+                        .ok_or(anyhow!("get const value attr"))?
+                        .sdata_value()
+                        .ok_or(anyhow!("get variant value"))?;
+
+                    Ok(EnumVariant {
+                        name: variant_name,
+                        value: variant_value,
+                    })
+                })?;
+
+                Type::Enum {
+                    name,
+                    encoding,
+                    size,
+                    variants: Rc::new(variants),
+                }
+            }
             gimli::DW_TAG_typedef => {
-                let name_attr = entry.attr_value(gimli::DW_AT_name)?.ok_or(anyhow!("get name attr value"))?;
-                let name = Rc::from(unit_ref.attr_string(name_attr)?.to_string()?);
+                let name = Self::get_name(unit_ref, entry)?;
                 let subtype_id = self.process_entry_type(unit_ref, entry, type_storage, visited_types)?;
 
                 Type::Typedef(name, subtype_id)
             }
             gimli::DW_TAG_subroutine_type => {
-                let name = match entry.attr_value(gimli::DW_AT_name)? {
-                    Some(value) => Some(Rc::from(unit_ref.attr_string(value)?.to_string()?)),
-                    None => None,
-                };
+                let name = Self::get_optional_name(unit_ref, entry)?;
                 let return_type_id = self.process_entry_type(unit_ref, entry, type_storage, visited_types)?;
-                let mut args = Vec::new();
 
-                // process function arguments
-                let mut tree = unit_ref.entries_tree(Some(entry.offset()))?;
-                let root = tree.root()?;
-                let mut children = root.children();
-                while let Some(child) = children.next()? {
-                    let child_entry = child.entry();
-                    if child_entry.tag() == gimli::DW_TAG_formal_parameter {
-                        let arg_type_id = self.process_entry_type(unit_ref, child_entry, type_storage, visited_types)?;
-                        args.push(arg_type_id);
-                    }
+                let args = Self::map_subtree(unit_ref, entry, gimli::DW_TAG_formal_parameter, |child_entry| {
+                    self.process_entry_type(unit_ref, child_entry, type_storage, visited_types)
+                })?;
+
+                Type::FuncDef {
+                    name,
+                    return_type_id,
+                    args: Rc::new(args),
                 }
-
-                Type::FuncDef { name, return_type_id, args }
             }
             tag_type => bail!("unexpected tag type {}", tag_type),
         };
@@ -385,6 +405,38 @@ impl<R: gimli::Reader> LocFinder<R> {
         type_storage.replace(type_id, typ)?;
 
         Ok(type_id)
+    }
+
+    fn get_name(unit_ref: &gimli::UnitRef<R>, entry: &gimli::DebuggingInformationEntry<R>) -> Result<Rc<str>> {
+        let name_attr = entry.attr_value(gimli::DW_AT_name)?.ok_or(anyhow!("get name attr value"))?;
+        let name = Rc::from(unit_ref.attr_string(name_attr)?.to_string()?);
+        Ok(name)
+    }
+
+    fn get_optional_name(unit_ref: &gimli::UnitRef<R>, entry: &gimli::DebuggingInformationEntry<R>) -> Result<Option<Rc<str>>> {
+        match entry.attr_value(gimli::DW_AT_name)? {
+            Some(value) => Ok(Some(Rc::from(unit_ref.attr_string(value)?.to_string()?))),
+            None => Ok(None),
+        }
+    }
+
+    fn map_subtree<F, T>(unit_ref: &gimli::UnitRef<R>, entry: &gimli::DebuggingInformationEntry<R>, entry_tag: gimli::DwTag, mut f: F) -> Result<Vec<T>>
+    where
+        F: FnMut(&gimli::DebuggingInformationEntry<R>) -> Result<T>,
+    {
+        let mut tree = unit_ref.entries_tree(Some(entry.offset()))?;
+        let root = tree.root()?;
+        let mut children = root.children();
+        let mut result = Vec::new();
+        while let Some(child) = children.next()? {
+            let child_entry = child.entry();
+            if child_entry.tag() == entry_tag {
+                let value = f(child.entry())?;
+                result.push(value);
+            }
+        }
+
+        Ok(result)
     }
 
     fn find_lines(&mut self, unit_ref: &gimli::UnitRef<R>) -> Result<()> {

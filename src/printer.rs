@@ -55,7 +55,37 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                 self.print_type(f, subtype_id)?;
                 write!(f, "*")?;
             }
-            Type::Struct { name, .. } => write!(f, "{}", name)?,
+            Type::Struct { name, fields, .. } => match name {
+                Some(name) => write!(f, "{}", name)?,
+                None => {
+                    write!(f, "struct {{ ")?;
+
+                    for (i, field) in fields.iter().enumerate() {
+                        if i != 0 {
+                            write!(f, ", ")?;
+                        }
+                        self.print_type(f, field.type_id)?; // anonymous struct can't make recursion
+                        write!(f, " {}", field.name)?;
+                    }
+
+                    write!(f, " }}")?;
+                }
+            },
+            Type::Enum { name, variants, .. } => match name {
+                Some(name) => write!(f, "enum {}", name)?,
+                None => {
+                    write!(f, "enum {{ ")?;
+
+                    for (i, variant) in variants.iter().enumerate() {
+                        if i != 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{}", variant.name)?;
+                    }
+
+                    write!(f, " }}")?;
+                }
+            },
             Type::Typedef(name, _) => write!(f, "{}", name)?,
             Type::FuncDef { name, return_type_id, args } => {
                 self.print_type(f, return_type_id)?;
@@ -137,6 +167,30 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
 
                 write!(f, " }}")?;
             }
+            Type::Enum { encoding, size, variants, .. } => {
+                let enum_value = match encoding {
+                    gimli::DW_ATE_signed => match size {
+                        1 => value.buf.get_i8() as i64,
+                        2 => value.buf.get_i16_ne() as i64,
+                        4 => value.buf.get_i32_ne() as i64,
+                        8 => value.buf.get_i64_ne(),
+                        _ => bail!("invalid enum subtype byte size"),
+                    },
+                    gimli::DW_ATE_unsigned => match size {
+                        1 => value.buf.get_u8() as i64,
+                        2 => value.buf.get_u16_ne() as i64,
+                        4 => value.buf.get_u32_ne() as i64,
+                        8 => value.buf.get_u64_ne() as i64,
+                        _ => bail!("invalid enum subtype byte size"),
+                    },
+                    _ => bail!("invalid enum subtype encoding"),
+                };
+
+                match variants.iter().find(|&variant| variant.value == enum_value) {
+                    Some(variant) => write!(f, "{}", variant.name)?,
+                    None => write!(f, "{}", enum_value)?,
+                };
+            }
             Type::FuncDef { .. } => bail!("can't print func value"),
             Type::Func(_) => {
                 let ptr = value.buf.get_u64_ne();
@@ -144,7 +198,7 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                     return Ok(write!(f, "null")?);
                 }
 
-                match self.session.find_func_by_address(ptr) {
+                match self.session.get_loc_finder().find_func_by_address(ptr) {
                     Some(func_name) => write!(f, "{}", func_name)?,
                     None => write!(f, "{:#x}", ptr)?,
                 }

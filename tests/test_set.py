@@ -96,3 +96,45 @@ int main()
             Step("q"),
         ]
     )
+
+
+def test_enum(debugger):
+    debugger(
+        code="""#include <stdio.h>
+
+enum Color
+{
+    RED,
+    GREEN,
+    BLUE,
+};
+
+int main()
+{
+    enum Color color = RED;
+    switch (color)
+    {
+    case RED:
+        printf("red\\n");
+        break;
+    case GREEN:
+        printf("green\\n");
+        break;
+    case BLUE:
+        printf("blue\\n");
+        break;
+    }
+    return 0;
+}
+""",
+        steps=[
+            Step("b 13", "breakpoint set"),
+            Step("r"),
+            Step("p color", "enum Color color = RED"),
+            Step("set color = BLUE"),
+            Step("p color", "enum Color color = BLUE"),
+            Step("set color = YELLOW", "invalid value"),
+            Step("c"),
+            Step("q"),
+        ]
+    )
