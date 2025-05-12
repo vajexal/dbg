@@ -2,16 +2,17 @@ use anyhow::{bail, Result};
 use bytes::{BufMut, BytesMut};
 
 use crate::error::DebuggerError;
+use crate::path::Path;
 use crate::printer::Printer;
 use crate::session::DebugSession;
 use crate::types::Type;
 
-pub fn print_var<R: gimli::Reader>(session: &DebugSession<R>, name: Option<&str>) -> Result<()> {
+pub fn print_var<R: gimli::Reader>(session: &DebugSession<R>, path: Option<&Path>) -> Result<()> {
     let printer = Printer::new(session);
 
-    match name {
-        Some(name) => {
-            let var = session.get_var(name)?;
+    match path {
+        Some(path) => {
+            let var = session.get_var(path)?;
             printer.print(&var)?;
         }
         None => {
@@ -24,8 +25,8 @@ pub fn print_var<R: gimli::Reader>(session: &DebugSession<R>, name: Option<&str>
     Ok(())
 }
 
-pub fn set_var<R: gimli::Reader>(session: &DebugSession<R>, name: &str, value: &str) -> Result<()> {
-    let loc = session.get_var_loc(name)?;
+pub fn set_var<R: gimli::Reader>(session: &DebugSession<R>, path: &Path, value: &str) -> Result<()> {
+    let loc = session.get_var_loc(path)?;
 
     let mut buf = BytesMut::new();
     match session.get_type_storage().get(loc.type_id)? {

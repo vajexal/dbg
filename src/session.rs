@@ -12,11 +12,12 @@ use crate::context::Context;
 use crate::error::DebuggerError;
 use crate::loc_finder::{LocFinder, VarRef};
 use crate::location::{TypedValueLoc, ValueLoc};
+use crate::path::{Path, PostfixOperator, PrefixOperator};
 use crate::trap::Trap;
 use crate::types::{Type, TypeStorage};
 use crate::unwinder::Unwinder;
 use crate::utils::WORD_SIZE;
-use crate::var::{Operator, Value, Var};
+use crate::var::{Value, Var};
 
 use anyhow::{anyhow, bail, Result};
 use bytes::{Buf, Bytes};
@@ -427,23 +428,21 @@ impl<R: gimli::Reader> DebugSession<R> {
         Ok(vars)
     }
 
-    pub fn get_var_loc(&self, path: &str) -> Result<TypedValueLoc> {
-        let (operators, path) = Self::parse_path(path);
-        let (&name, path) = path.split_first().ok_or(DebuggerError::InvalidPath)?;
+    pub fn get_var_loc(&self, path: &Path) -> Result<TypedValueLoc> {
         let ip = self.get_ip()?;
         let func = self.loc_finder.find_func_by_address(ip).ok_or(anyhow!("get current func"))?;
-        let var_ref = match self.loc_finder.get_var(name, Some(func.as_ref())) {
+        let var_ref = match self.loc_finder.get_var(path.name, Some(func.as_ref())) {
             Some(var_ref) => var_ref,
-            None => bail!(DebuggerError::VarNotFound(String::from(name))),
+            None => bail!(DebuggerError::VarNotFound(String::from(path.name))),
         };
         let mut loc = self.get_value_loc_by_var_ref(&func, var_ref)?;
-        loc = self.unwind_loc(loc, path)?;
-        loc = self.apply_operators(loc, &operators)?;
+        loc = self.unwind_loc(loc, &path.postfix_operators)?;
+        loc = self.apply_prefix_operators(loc, &path.prefix_operators)?;
 
         Ok(loc)
     }
 
-    pub fn get_var(&self, path: &str) -> Result<Var> {
+    pub fn get_var(&self, path: &Path) -> Result<Var> {
         let loc = self.get_var_loc(path)?;
         let size = self.type_storage.get_type_size(loc.type_id)?;
         let buf = self.read_value_loc(loc.location, size)?;
@@ -479,63 +478,45 @@ impl<R: gimli::Reader> DebugSession<R> {
         Ok(Value::new(loc.type_id, buf))
     }
 
-    fn unwind_loc(&self, loc: TypedValueLoc, path: &[&str]) -> Result<TypedValueLoc> {
-        if path.is_empty() {
-            return Ok(loc);
-        }
-
-        match self.type_storage.get(loc.type_id)? {
-            Type::Const(subtype_id) | Type::Volatile(subtype_id) | Type::Atomic(subtype_id) | Type::Typedef(_, subtype_id) => {
-                self.unwind_loc(loc.with_type(subtype_id), path)
-            }
-            Type::Pointer(subtype_id) => {
-                let ptr = self.read_value_loc(loc.location, WORD_SIZE)?.get_u64_ne();
-                if ptr == 0 {
-                    bail!(DebuggerError::InvalidPath);
-                }
-
-                self.unwind_loc(TypedValueLoc::new(ValueLoc::Address(ptr), subtype_id), path)
-            }
-            Type::Struct { fields, .. } => match fields.iter().find(|&field| field.name.as_ref() == path[0]) {
-                Some(field) => self.unwind_loc(TypedValueLoc::new(loc.location.with_offset(field.offset)?, field.type_id), &path[1..]),
-                None => Err(anyhow!(DebuggerError::InvalidPath)),
-            },
-            Type::Union { fields, .. } => match fields.iter().find(|&field| field.name.as_ref() == path[0]) {
-                Some(field) => self.unwind_loc(loc.with_type(field.type_id), &path[1..]),
-                None => Err(anyhow!(DebuggerError::InvalidPath)),
-            },
-            _ => Err(anyhow!(DebuggerError::InvalidPath)),
-        }
-    }
-
-    fn parse_path(path: &str) -> (Vec<Operator>, Vec<&str>) {
-        let operators: Vec<Operator> = path.chars().map_while(|c| Operator::try_from(c).ok()).collect();
-        let path = path[operators.len()..].split('.').collect();
-
-        (operators, path)
-    }
-
-    fn apply_operators(&self, loc: TypedValueLoc, operators: &[Operator]) -> Result<TypedValueLoc> {
-        match operators.last() {
-            Some(operator) => match operator {
-                Operator::Ref => match loc.location {
-                    ValueLoc::Address(address) => {
-                        let ref_type_id = self.type_storage.get_type_ref(loc.type_id);
-                        self.apply_operators(TypedValueLoc::new(ValueLoc::Value(address), ref_type_id), &operators[..operators.len() - 1])
+    fn unwind_loc(&self, loc: TypedValueLoc, postfix_operators: &[PostfixOperator]) -> Result<TypedValueLoc> {
+        match postfix_operators.first().copied() {
+            Some(postfix_operator) => match postfix_operator {
+                PostfixOperator::Field(field_name) => match self.type_storage.get(loc.type_id)? {
+                    Type::Const(subtype_id) | Type::Volatile(subtype_id) | Type::Atomic(subtype_id) | Type::Typedef(_, subtype_id) => {
+                        self.unwind_loc(loc.with_type(subtype_id), postfix_operators)
                     }
-                    _ => Err(anyhow!(DebuggerError::InvalidPath)),
-                },
-                Operator::Deref => match self.type_storage.get(loc.type_id)? {
                     Type::Pointer(subtype_id) => {
                         let ptr = self.read_value_loc(loc.location, WORD_SIZE)?.get_u64_ne();
                         if ptr == 0 {
                             bail!(DebuggerError::InvalidPath);
                         }
 
-                        self.apply_operators(TypedValueLoc::new(ValueLoc::Address(ptr), subtype_id), &operators[..operators.len() - 1])
+                        self.unwind_loc(TypedValueLoc::new(ValueLoc::Address(ptr), subtype_id), postfix_operators)
                     }
-                    Type::Const(subtype_id) | Type::Volatile(subtype_id) | Type::Atomic(subtype_id) | Type::Typedef(_, subtype_id) => {
-                        self.apply_operators(loc.with_type(subtype_id), operators)
+                    Type::Struct { fields, .. } => match fields.iter().find(|&field| field.name.as_ref() == field_name) {
+                        Some(field) => self.unwind_loc(
+                            TypedValueLoc::new(loc.location.with_offset(field.offset as usize)?, field.type_id),
+                            &postfix_operators[1..],
+                        ),
+                        None => Err(anyhow!(DebuggerError::InvalidPath)),
+                    },
+                    Type::Union { fields, .. } => match fields.iter().find(|&field| field.name.as_ref() == field_name) {
+                        Some(field) => self.unwind_loc(loc.with_type(field.type_id), &postfix_operators[1..]),
+                        None => Err(anyhow!(DebuggerError::InvalidPath)),
+                    },
+                    _ => Err(anyhow!(DebuggerError::InvalidPath)),
+                },
+                PostfixOperator::Index(index) => match self.type_storage.get(loc.type_id)? {
+                    Type::Array { subtype_id, count } => {
+                        if index >= count {
+                            bail!(DebuggerError::InvalidPath);
+                        }
+
+                        let subtype_size = self.type_storage.get_type_size(subtype_id)?;
+                        self.unwind_loc(
+                            TypedValueLoc::new(loc.location.with_offset(index * subtype_size)?, subtype_id),
+                            &postfix_operators[1..],
+                        )
                     }
                     _ => Err(anyhow!(DebuggerError::InvalidPath)),
                 },
@@ -544,14 +525,57 @@ impl<R: gimli::Reader> DebugSession<R> {
         }
     }
 
-    fn get_var_name(path: &str) -> Result<Rc<str>> {
-        let pos = path.find(|c| c != '*').ok_or(DebuggerError::InvalidPath)?;
-        if pos == 0 {
-            return Ok(Rc::from(path.split('.').next_back().unwrap()));
+    fn apply_prefix_operators(&self, loc: TypedValueLoc, operators: &[PrefixOperator]) -> Result<TypedValueLoc> {
+        match operators.last() {
+            Some(operator) => match operator {
+                PrefixOperator::Ref => match loc.location {
+                    ValueLoc::Address(address) => {
+                        let ref_type_id = self.type_storage.get_type_ref(loc.type_id);
+                        self.apply_prefix_operators(TypedValueLoc::new(ValueLoc::Value(address), ref_type_id), &operators[..operators.len() - 1])
+                    }
+                    _ => Err(anyhow!(DebuggerError::InvalidPath)),
+                },
+                PrefixOperator::Deref => match self.type_storage.get(loc.type_id)? {
+                    Type::Pointer(subtype_id) => {
+                        let ptr = self.read_value_loc(loc.location, WORD_SIZE)?.get_u64_ne();
+                        if ptr == 0 {
+                            bail!(DebuggerError::InvalidPath);
+                        }
+
+                        self.apply_prefix_operators(TypedValueLoc::new(ValueLoc::Address(ptr), subtype_id), &operators[..operators.len() - 1])
+                    }
+                    Type::Const(subtype_id) | Type::Volatile(subtype_id) | Type::Atomic(subtype_id) | Type::Typedef(_, subtype_id) => {
+                        self.apply_prefix_operators(loc.with_type(subtype_id), operators)
+                    }
+                    _ => Err(anyhow!(DebuggerError::InvalidPath)),
+                },
+            },
+            None => Ok(loc),
+        }
+    }
+
+    fn get_var_name(path: &Path) -> Result<Rc<str>> {
+        let mut name = String::new();
+        for prefix_operator in path.prefix_operators.iter() {
+            name.push(prefix_operator.into());
         }
 
-        let (prefix, path) = path.split_at(pos);
-        let name = format!("{}{}", prefix, path.split('.').next_back().unwrap());
+        let last_field_operator_pos = path
+            .postfix_operators
+            .iter()
+            .rposition(|postfix_operator| matches!(postfix_operator, PostfixOperator::Field(_)));
+
+        if last_field_operator_pos.is_none() {
+            name.push_str(path.name);
+        }
+
+        for postfix_operator in path.postfix_operators[last_field_operator_pos.unwrap_or(0)..].iter() {
+            match postfix_operator {
+                PostfixOperator::Field(field_name) => name.push_str(field_name),
+                PostfixOperator::Index(index) => name.push_str(&format!("[{}]", index)),
+            }
+        }
+
         Ok(Rc::from(name))
     }
 

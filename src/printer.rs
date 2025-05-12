@@ -55,6 +55,10 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                 self.print_type(f, subtype_id)?;
                 write!(f, "*")?;
             }
+            Type::Array { subtype_id, count } => {
+                self.print_type(f, subtype_id)?;
+                write!(f, "[{}]", count)?;
+            }
             Type::Struct { name, fields, .. } => match name {
                 Some(name) => write!(f, "{}", name)?,
                 None => {
@@ -169,6 +173,18 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                 let ptr = value.buf.get_u64_ne();
                 let s = self.session.read_c_string(ptr)?;
                 write!(f, "{:?}", s)?;
+            }
+            Type::Array { subtype_id, count } => {
+                let subtype_size = self.session.get_type_storage().get_type_size(subtype_id)?;
+                write!(f, "[")?;
+                for i in 0..count {
+                    if i != 0 {
+                        write!(f, ", ")?;
+                    }
+                    let offset = i * subtype_size;
+                    self.print_value(f, Value::new(subtype_id, value.buf.slice(offset..offset + subtype_size)))?;
+                }
+                write!(f, "]")?;
             }
             Type::Struct { fields, .. } => {
                 write!(f, "{{ ")?;

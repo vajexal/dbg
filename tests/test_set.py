@@ -171,3 +171,43 @@ int main()
             Step("q"),
         ]
     )
+
+
+def test_array(debugger):
+    debugger(
+        code="""#include <stdio.h>
+
+int main()
+{
+    int a[3][3][3] = {
+        {
+            {1, 2, 3},
+            {4, 5, 6},
+            {7, 8, 9},
+        },
+        {
+            {10, 11, 12},
+            {13, 14, 15},
+            {16, 17, 18},
+        },
+        {
+            {19, 20, 21},
+            {22, 23, 24},
+            {25, 26, 27},
+        },
+    };
+    printf("%ld\\n", sizeof(a));
+    return 0;
+}
+""",
+        steps=[
+            Step("b 22", "breakpoint set"),
+            Step("r"),
+            Step("p a[1][1][1]", "int a[1][1][1] = 14"),
+            Step("p a[0]", "int[3][3] a[0] = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]"),
+            Step("set a[1][1][1] = 100"),
+            Step("p a[1][1]", "int[3] a[1][1] = [13, 100, 15]"),
+            Step("c"),
+            Step("q"),
+        ]
+    )

@@ -29,6 +29,10 @@ pub enum Type {
     Atomic(TypeId),
     Pointer(TypeId),
     String(TypeId),
+    Array {
+        subtype_id: TypeId,
+        count: usize,
+    },
     Struct {
         name: Option<Rc<str>>,
         size: u16,
@@ -111,6 +115,10 @@ impl TypeStorage {
             Type::Base { size, .. } | Type::Struct { size, .. } | Type::Enum { size, .. } | Type::Union { size, .. } => Ok(size as usize),
             Type::Const(subtype_id) | Type::Volatile(subtype_id) | Type::Atomic(subtype_id) | Type::Typedef(_, subtype_id) => self.get_type_size(subtype_id),
             Type::Pointer(_) | Type::String(_) | Type::Func(_) => Ok(WORD_SIZE),
+            Type::Array { subtype_id, count } => {
+                let subtype_size = self.get_type_size(subtype_id)?;
+                Ok(subtype_size * count)
+            }
         }
     }
 

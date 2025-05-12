@@ -1,6 +1,5 @@
 use std::rc::Rc;
 
-use anyhow::anyhow;
 use bytes::Bytes;
 
 use crate::types::TypeId;
@@ -26,23 +25,5 @@ pub struct Var {
 impl Var {
     pub fn new<S: Into<Rc<str>>>(name: S, value: Value) -> Self {
         Self { name: name.into(), value }
-    }
-}
-
-#[derive(Debug)]
-pub enum Operator {
-    Ref,
-    Deref,
-}
-
-impl TryFrom<char> for Operator {
-    type Error = anyhow::Error;
-
-    fn try_from(value: char) -> Result<Self, Self::Error> {
-        match value {
-            '&' => Ok(Operator::Ref),
-            '*' => Ok(Operator::Deref),
-            _ => Err(anyhow!("invalid operator")),
-        }
     }
 }

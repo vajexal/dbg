@@ -42,8 +42,10 @@ quit = { "quit" | "q" }
 help = { "help" | "h" }
 
 breakpoint_name = { (!(" " | "\t" | "\r" | "\n") ~ ANY)+ }
-path = @{ operator* ~ name ~ ("." ~ name)* }
+path = ${ operator* ~ path_part ~ ("." ~ path_part)* }
+path_part = _{ name ~ array_index* }
 operator = { "*" | ("&" ~ !"&") }
+array_index = { "[" ~ int ~ "]" }
 name = { (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 
 value = _{ number | boolean | string | enum_variant | null }
@@ -51,10 +53,11 @@ number = @{ hex | dec }
 hex = @{ "0x" ~ ASCII_HEX_DIGIT{1, 8} }
 dec = @{
     "-"?
-    ~ ("0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*)
+    ~ int
     ~ ("." ~ ASCII_DIGIT*)?
     ~ (^"e" ~ ("+" | "-")? ~ ASCII_DIGIT+)?
 }
+int = @{ "0" | (ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*) }
 boolean = { "true" | "false" }
 string = ${ "\"" ~ inner ~ "\"" }
 inner = @{ char* }

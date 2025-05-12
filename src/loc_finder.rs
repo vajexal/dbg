@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use anyhow::{anyhow, bail, Result};
-use gimli::DW_AT_type;
 
 use crate::types::{EnumVariant, Field, Type, TypeId, TypeStorage, UnionField};
 use crate::utils::ranges::Ranges;
@@ -290,6 +289,43 @@ impl<R: gimli::Reader> LocFinder<R> {
                     _ => Type::Pointer(subtype_id),
                 }
             }
+            gimli::DW_TAG_array_type => {
+                let subtype_id = self.process_entry_type(unit_ref, entry, type_storage, visited_types)?;
+                let dimensions = Self::map_subtree(unit_ref, entry, gimli::DW_TAG_subrange_type, |child_entry| {
+                    let count = match child_entry.attr_value(gimli::DW_AT_count)? {
+                        Some(value) => value.udata_value().ok_or(anyhow!("get count attr value"))?,
+                        None => {
+                            let lower_bound = match child_entry.attr_value(gimli::DW_AT_lower_bound)? {
+                                Some(value) => value.udata_value().ok_or(anyhow!("get lower bound attr value"))?,
+                                None => 0,
+                            };
+
+                            let upper_bound = child_entry
+                                .attr_value(gimli::DW_AT_upper_bound)?
+                                .ok_or(anyhow!("no attributes to find dimension upper bound"))?
+                                .udata_value()
+                                .ok_or(anyhow!("get upper bound attr value"))?;
+
+                            upper_bound - lower_bound + 1
+                        }
+                    };
+
+                    Ok(count as usize)
+                })?;
+
+                // create type for every nested dimension
+                let subtype_id = dimensions
+                    .iter()
+                    .skip(1)
+                    .copied()
+                    .rev()
+                    .fold(subtype_id, |subtype_id, count| type_storage.add(Type::Array { subtype_id, count }));
+
+                Type::Array {
+                    subtype_id,
+                    count: dimensions[0],
+                }
+            }
             gimli::DW_TAG_structure_type => {
                 let name = Self::get_optional_name(unit_ref, entry)?;
                 let size = Self::get_byte_size(entry)?;
@@ -321,7 +357,7 @@ impl<R: gimli::Reader> LocFinder<R> {
             }
             gimli::DW_TAG_enumeration_type => {
                 let name = Self::get_optional_name(unit_ref, entry)?;
-                let (encoding, size) = match entry.attr_value(DW_AT_type)? {
+                let (encoding, size) = match entry.attr_value(gimli::DW_AT_type)? {
                     Some(_) => {
                         let subtype_id = self.process_entry_type(unit_ref, entry, type_storage, visited_types)?;
                         match type_storage.get(subtype_id)? {

@@ -1,6 +1,8 @@
 use anyhow::{anyhow, Result};
 
-use crate::{error::DebuggerError, types::TypeId};
+use crate::error::DebuggerError;
+use crate::types::TypeId;
+use crate::utils::WORD_SIZE;
 
 #[derive(Debug, Clone)]
 pub enum ValueLoc {
@@ -10,12 +12,18 @@ pub enum ValueLoc {
 }
 
 impl ValueLoc {
-    pub fn with_offset(self, delta: u16) -> Result<Self> {
+    pub fn with_offset(self, delta: usize) -> Result<Self> {
         match self {
-            ValueLoc::Register { register, offset } => Ok(Self::Register {
-                register,
-                offset: offset + delta,
-            }),
+            ValueLoc::Register { register, offset } => {
+                if offset as usize + delta >= WORD_SIZE {
+                    Err(anyhow!(DebuggerError::InvalidLocation))
+                } else {
+                    Ok(Self::Register {
+                        register,
+                        offset: offset + delta as u16,
+                    })
+                }
+            }
             ValueLoc::Address(address) => Ok(Self::Address(address + delta as u64)),
             ValueLoc::Value(_) => Err(anyhow!(DebuggerError::InvalidLocation)),
         }
