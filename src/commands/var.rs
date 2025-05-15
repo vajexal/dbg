@@ -29,7 +29,7 @@ pub fn set_var<R: gimli::Reader>(session: &DebugSession<R>, path: &Path, value: 
     let loc = session.get_var_loc(path)?;
 
     let mut buf = BytesMut::new();
-    match session.get_type_storage().get(loc.type_id)? {
+    match session.get_type_storage().unwind_type(loc.type_id)? {
         Type::Base { encoding, size, .. } => match encoding {
             gimli::DW_ATE_boolean => {
                 let value = value.parse::<bool>().map_err(|_| DebuggerError::InvalidValue)?;
@@ -93,6 +93,10 @@ pub fn set_var<R: gimli::Reader>(session: &DebugSession<R>, path: &Path, value: 
                 },
                 _ => bail!("invalid enum encoding"),
             };
+        }
+        Type::Func(_) => {
+            let address = session.get_loc_finder().find_loc(value)?.ok_or(DebuggerError::InvalidValue)?;
+            buf.put_u64_ne(address);
         }
         _ => bail!(DebuggerError::InvalidPath),
     }

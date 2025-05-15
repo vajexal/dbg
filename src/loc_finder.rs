@@ -56,10 +56,10 @@ impl<R: gimli::Reader> LocFinder<R> {
     pub fn make(dwarf: &gimli::Dwarf<R>, base_address: u64) -> Result<(Self, TypeStorage)> {
         let mut loc_finder = Self {
             base_address,
-            funcs: HashMap::new(),
             locations: HashMap::new(),
             addr2line: HashMap::new(),
             lines: HashMap::new(),
+            funcs: HashMap::new(),
             func_ranges: Ranges::new(),
             unit_ranges: Ranges::new(),
             main_unit: None,
@@ -510,7 +510,7 @@ impl<R: gimli::Reader> LocFinder<R> {
             let fileline: Rc<str> = Rc::from(format!("{}:{}", filepath, line));
 
             let address = self.base_address + row.address();
-            self.locations.insert(fileline.clone(), address);
+            self.locations.entry(fileline.clone()).or_insert(address);
             self.addr2line.insert(address, fileline);
 
             if row.end_sequence() {

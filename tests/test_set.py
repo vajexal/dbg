@@ -211,3 +211,39 @@ int main()
             Step("q"),
         ]
     )
+
+
+def test_func(debugger):
+    debugger(
+        code="""#include <stdio.h>
+
+typedef int (*Operation)(int, int);
+
+int add(int a, int b)
+{
+    return a + b;
+}
+
+int sub(int a, int b)
+{
+    return a - b;
+}
+
+int main()
+{
+    Operation op = add;
+    printf("%d\\n", op(5, 3));
+    return 0;
+}
+""",
+        steps=[
+            Step("b 18", "breakpoint set"),
+            Step("r"),
+            Step("p op", "Operation op = add"),
+            Step("set op = sub"),
+            Step("p op", "Operation op = sub"),
+            Step("set op = mul", "invalid value"),
+            Step("c", "2"),
+            Step("q"),
+        ]
+    )
