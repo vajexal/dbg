@@ -444,8 +444,7 @@ impl<R: gimli::Reader> DebugSession<R> {
 
     pub fn get_var(&self, path: &Path) -> Result<Var> {
         let loc = self.get_var_loc(path)?;
-        let size = self.type_storage.get_type_size(loc.type_id)?;
-        let buf = self.read_value_loc(loc.location, size)?;
+        let buf = self.read_loc(&loc)?;
         let value = Value::new(loc.type_id, buf);
         let name = Self::get_var_name(path)?;
         let var = Var::new(name, value);
@@ -472,8 +471,7 @@ impl<R: gimli::Reader> DebugSession<R> {
 
     fn get_value_by_var_ref(&self, func: &str, var_ref: VarRef<R::Offset>) -> Result<Value> {
         let loc = self.get_value_loc_by_var_ref(func, var_ref)?;
-        let size = self.type_storage.get_type_size(loc.type_id)?;
-        let buf = self.read_value_loc(loc.location, size)?;
+        let buf = self.read_loc(&loc)?;
 
         Ok(Value::new(loc.type_id, buf))
     }
@@ -486,7 +484,7 @@ impl<R: gimli::Reader> DebugSession<R> {
                         self.unwind_loc(loc.with_type(subtype_id), postfix_operators)
                     }
                     Type::Pointer(subtype_id) => {
-                        let ptr = self.read_value_loc(loc.location, WORD_SIZE)?.get_u64_ne();
+                        let ptr = self.read_loc(&loc)?.get_u64_ne();
                         if ptr == 0 {
                             bail!(DebuggerError::InvalidPath);
                         }
@@ -537,7 +535,7 @@ impl<R: gimli::Reader> DebugSession<R> {
                 },
                 PrefixOperator::Deref => match self.type_storage.get(loc.type_id)? {
                     Type::Pointer(subtype_id) => {
-                        let ptr = self.read_value_loc(loc.location, WORD_SIZE)?.get_u64_ne();
+                        let ptr = self.read_loc(&loc)?.get_u64_ne();
                         if ptr == 0 {
                             bail!(DebuggerError::InvalidPath);
                         }
@@ -706,12 +704,13 @@ impl<R: gimli::Reader> DebugSession<R> {
         }
     }
 
-    fn read_value_loc(&self, loc: ValueLoc, size: usize) -> Result<Bytes> {
-        log::trace!("read {} bytes from {:?}", size, loc);
-
+    fn read_loc(&self, loc: &TypedValueLoc) -> Result<Bytes> {
+        let size = self.type_storage.get_type_size(loc.type_id)?;
         let mut buf = vec![0; size];
 
-        match loc {
+        log::trace!("read {} bytes from {:?}", size, loc);
+
+        match loc.location {
             ValueLoc::Register { register, offset } => {
                 if offset as usize + size > WORD_SIZE {
                     bail!("too many bytes to read")
