@@ -119,7 +119,7 @@ run into function call, for example if we stopped on `hello.c:10`
 > step-in
 ```
 
-now we are on `hello.c:4` (yeah, not line 5, that's current behavior, could change in the future)
+now we are on `hello.c:5`
 
 #### step-out
 

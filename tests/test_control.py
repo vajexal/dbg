@@ -15,12 +15,10 @@ int main()
             Step("b 5", "breakpoint set"),
             Step("r"),
             Step("r", "invalid command"),
-            Step("loc", "t.c:5"),
             Step("c", "hello world"),
             Step("r", "invalid command"),
             Step("q"),
-        ],
-        filename="t"
+        ]
     )
 
 

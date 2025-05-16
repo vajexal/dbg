@@ -97,7 +97,11 @@ impl<R: gimli::Reader> LocFinder<R> {
 
         let address = self.base_address + address;
         self.locations.entry(fileline.clone()).or_insert(address);
-        self.addr2line.insert(address, fileline);
+
+        // don't save address to line if it's function prologue
+        if !self.is_func_start(address) {
+            self.addr2line.insert(address, fileline);
+        }
 
         if is_end_sequence {
             return;
@@ -155,6 +159,10 @@ impl<R: gimli::Reader> LocFinder<R> {
             Some(func) => func.as_ref() == MAIN_FUNC_NAME,
             None => false,
         }
+    }
+
+    fn is_func_start(&self, address: u64) -> bool {
+        self.find_func_start(address).map(|start| start == address).unwrap_or(false)
     }
 
     fn parse_fileline(fileline: &str) -> Option<(&str, u64)> {

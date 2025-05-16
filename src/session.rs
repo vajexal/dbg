@@ -220,7 +220,14 @@ impl<R: gimli::Reader> DebugSession<R> {
         // there is posibility that we'll stop with bp <= start_bp (using some recursion), but we'll ignore this case for now
         self.add_trap(return_ip)?;
         self.cont()?;
-        self.wait()
+        self.wait()?;
+
+        // single step till we hit some line
+        while self.get_current_line()?.is_none() {
+            self.single_step()?;
+        }
+
+        Ok(())
     }
 
     fn rewind(&self) -> Result<()> {
