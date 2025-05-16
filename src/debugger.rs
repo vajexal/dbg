@@ -6,10 +6,10 @@ use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process;
 
+use crate::consts::WORD_SIZE;
 use crate::dwarf_parser::DwarfParser;
 use crate::session::DebugSession;
 use crate::unwinder::{UnwindFrame, Unwinder};
-use crate::utils::WORD_SIZE;
 use gimli::Section;
 use memmap2::Mmap;
 use object::{Object, ObjectSection};

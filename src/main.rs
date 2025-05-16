@@ -1,5 +1,6 @@
 mod breakpoint;
 mod commands;
+mod consts;
 mod context;
 mod debugger;
 mod dwarf_parser;

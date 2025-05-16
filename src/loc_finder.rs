@@ -3,9 +3,9 @@ use std::rc::Rc;
 
 use anyhow::Result;
 
+use crate::consts::{FUNC_EPILOGUE_SIZE, FUNC_PROLOGUE_SIZE, MAIN_FUNC_NAME};
 use crate::types::TypeId;
 use crate::utils::ranges::Ranges;
-use crate::utils::MAIN_FUNC_NAME;
 
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
 pub struct EntryRef<Offset: gimli::ReaderOffset> {
@@ -92,20 +92,17 @@ impl<R: gimli::Reader> LocFinder<R> {
         };
     }
 
-    pub fn add_line(&mut self, filepath: Rc<str>, line: usize, address: u64, is_end_sequence: bool) {
+    pub fn add_line(&mut self, filepath: Rc<str>, line: usize, address: u64) {
         let fileline: Rc<str> = Rc::from(format!("{}:{}", filepath, line));
 
         let address = self.base_address + address;
         self.locations.entry(fileline.clone()).or_insert(address);
 
-        // don't save address to line if it's function prologue
-        if !self.is_func_start(address) {
-            self.addr2line.insert(address, fileline);
-        }
-
-        if is_end_sequence {
+        if self.is_func_prologue(address) || self.is_func_epilogue(address) {
             return;
         }
+
+        self.addr2line.insert(address, fileline);
 
         let lines = self.lines.entry(filepath).or_default();
         // skip empty lines
@@ -150,7 +147,7 @@ impl<R: gimli::Reader> LocFinder<R> {
         self.func_ranges.find_range(address).map(|(start, _)| start)
     }
 
-    pub fn find_fund_end(&self, address: u64) -> Option<u64> {
+    pub fn find_func_end(&self, address: u64) -> Option<u64> {
         self.func_ranges.find_range(address).map(|(_, end)| end)
     }
 
@@ -161,8 +158,16 @@ impl<R: gimli::Reader> LocFinder<R> {
         }
     }
 
-    fn is_func_start(&self, address: u64) -> bool {
-        self.find_func_start(address).map(|start| start == address).unwrap_or(false)
+    fn is_func_prologue(&self, address: u64) -> bool {
+        self.find_func_start(address)
+            .map(|start| address - start < FUNC_PROLOGUE_SIZE as u64)
+            .unwrap_or(false)
+    }
+
+    fn is_func_epilogue(&self, address: u64) -> bool {
+        self.find_func_end(address)
+            .map(|end| end - address < FUNC_EPILOGUE_SIZE as u64)
+            .unwrap_or(false)
     }
 
     fn parse_fileline(fileline: &str) -> Option<(&str, u64)> {

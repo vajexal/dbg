@@ -8,6 +8,7 @@ use std::process;
 use std::rc::Rc;
 
 use crate::breakpoint::Breakpoint;
+use crate::consts::{FUNC_PROLOGUE_MAGIC_BYTES, WORD_SIZE};
 use crate::context::Context;
 use crate::error::DebuggerError;
 use crate::loc_finder::{LocFinder, VarRef};
@@ -16,7 +17,6 @@ use crate::path::{Path, PostfixOperator, PrefixOperator};
 use crate::trap::Trap;
 use crate::types::{Type, TypeStorage};
 use crate::unwinder::Unwinder;
-use crate::utils::WORD_SIZE;
 use crate::var::{Value, Var};
 
 use anyhow::{anyhow, bail, Result};
@@ -25,7 +25,6 @@ use nix::sys::{ptrace, wait};
 use nix::unistd::Pid;
 
 const READ_MEM_BUF_SIZE: usize = 512;
-const FUNC_PROLOGUE_MAGIC_BYTES: [u8; 8] = [0xf3, 0x0f, 0x1e, 0xfa, 0x55, 0x48, 0x89, 0xe5];
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SessionState {
@@ -172,7 +171,7 @@ impl<R: gimli::Reader> DebugSession<R> {
             None => return self.step_out(),
         };
         log::trace!("next line address {:#x}", next_line_address);
-        let func_end = self.loc_finder.find_fund_end(ip).ok_or(anyhow!("can't find func end"))?;
+        let func_end = self.loc_finder.find_func_end(ip).ok_or(anyhow!("can't find func end"))?;
 
         if next_line_address >= func_end {
             log::trace!("next line is outside of func. Step out");

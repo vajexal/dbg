@@ -5,26 +5,28 @@ def test_step(debugger):
     debugger(
         code="""#include <stdio.h>
 
-int foo(int x)
+int foo(int x) { return x * 2; }
+
+int bar(int x)
 {
-    return x * 2;
+    return foo(x);
 }
 
 int main()
 {
-    int y = foo(5);
+    int y = bar(5);
     printf("%d\\n", y);
     return 0;
 }
 """,
         steps=[
-            Step("b 10", "breakpoint set"),
+            Step("b 7", "breakpoint set"),
             Step("r"),
-            Step("loc", "t.c:10"),
+            Step("loc", "t.c:7"),
             Step("step"),
-            Step("loc", "t.c:11"),
+            Step("loc", "t.c:13"),  # check that function call and prologue are skipped
             Step("step"),
-            Step("loc", "t.c:12"),
+            Step("loc", "t.c:14"),
             Step("c"),
             Step("q"),
         ],
@@ -58,8 +60,6 @@ int main()
             Step("loc", "t.c:7"),
             Step("step-in"),
             Step("loc", "t.c:3"),
-            Step("step-in"),
-            Step("loc", "t.c:8"),
             Step("step-in"),
             Step("loc", "t.c:13"),
             Step("c"),

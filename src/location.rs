@@ -1,8 +1,8 @@
 use anyhow::{anyhow, Result};
 
+use crate::consts::WORD_SIZE;
 use crate::error::DebuggerError;
 use crate::types::TypeId;
-use crate::utils::WORD_SIZE;
 
 #[derive(Debug, Clone)]
 pub enum ValueLoc {

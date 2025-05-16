@@ -2,7 +2,7 @@ use std::{cell::RefCell, rc::Rc};
 
 use thiserror::Error;
 
-use crate::utils::WORD_SIZE;
+use crate::consts::WORD_SIZE;
 
 #[derive(Debug, Error)]
 pub enum TypeError {

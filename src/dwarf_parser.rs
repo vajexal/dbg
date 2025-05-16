@@ -434,6 +434,10 @@ impl DwarfParser {
         let mut rows = program.rows();
 
         while let Some((header, row)) = rows.next_row()? {
+            if row.end_sequence() {
+                continue;
+            }
+
             let file = match row.file(header) {
                 Some(file) => file,
                 None => bail!("get path"),
@@ -450,7 +454,7 @@ impl DwarfParser {
 
             let line = row.line().ok_or(anyhow!("get line number"))?.get() as usize;
 
-            loc_finder.add_line(filepath, line, row.address(), row.end_sequence());
+            loc_finder.add_line(filepath, line, row.address());
         }
 
         Ok(())
