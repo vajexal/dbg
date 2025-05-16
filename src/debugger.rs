@@ -6,7 +6,7 @@ use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process;
 
-use crate::loc_finder::LocFinder;
+use crate::dwarf_parser::DwarfParser;
 use crate::session::DebugSession;
 use crate::unwinder::{UnwindFrame, Unwinder};
 use crate::utils::WORD_SIZE;
@@ -78,7 +78,7 @@ impl Debugger {
         };
         log::trace!("base address {:#x}", base_address);
 
-        let (loc_finder, type_storage) = LocFinder::make(&dwarf, base_address)?;
+        let (loc_finder, type_storage) = DwarfParser::parse(&dwarf, base_address)?;
 
         wait::waitpid(Pid::from_raw(child.id() as libc::pid_t), None)?;
 

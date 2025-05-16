@@ -13,6 +13,7 @@ pub enum TypeError {
 }
 
 pub type TypeId = usize;
+pub const VOID_TYPE_ID: TypeId = 0;
 
 type Result<T> = std::result::Result<T, TypeError>;
 

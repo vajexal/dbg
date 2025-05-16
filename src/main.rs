@@ -2,6 +2,7 @@ mod breakpoint;
 mod commands;
 mod context;
 mod debugger;
+mod dwarf_parser;
 mod error;
 mod fsm;
 mod loc_finder;
