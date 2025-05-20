@@ -135,29 +135,6 @@ now we are on `hello.c:11`
 
 print variable
 
-consider the following code:
-
-```c
-#include <stdio.h>
-
-typedef struct Foo
-{
-    int x;
-} Foo;
-
-int main()
-{
-    int x = 10;
-    int *y = &x;
-    const char *s = "hello world";
-    Foo foo = { 15 };
-    printf("%d, %s, %d\n", *y, s, foo.x);
-    return 0;
-}
-```
-
-then variables could be printed like this
-
 ```
 > p s // print variable
 const char* s = "hello world"
@@ -174,11 +151,13 @@ int *&x = 10
 > p foo.x // print field x of struct foo
 int x = 15
 
+> p a[0] // print static array element
+int a[1] = 10
+
 > p // prints all variables
 const char* s = "hello world"
 int x = 10
-int* y = 0x7ffd8a95df50
-Foo foo = { x = 15 }
+...
 ```
 
 #### set
@@ -186,17 +165,19 @@ Foo foo = { x = 15 }
 modify variable
 
 ```
-> set *y = 20
-> p x
-int x = 20
+> set *y = 20 // set value behind pointer
 
-> set s = "somebody once told me the world is gonna roll me"
-> p s
-const char* s = "somebody once told me the world is gonna roll me"
+> set s = "somebody once told me the world is gonna roll me" // set string
 
-> set foo.x = 30
-> p foo.x
-int x = 30
+> set foo.x = 30 // set struct field
+
+> set a[1] = 20 // set static array element
+
+> set color = BLUE // set enum variant
+
+> set data.i = 20 // set union field
+
+> set op = mul // set function pointer
 ```
 
 #### location | loc
