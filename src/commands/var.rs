@@ -6,6 +6,7 @@ use crate::path::Path;
 use crate::printer::Printer;
 use crate::session::DebugSession;
 use crate::types::Type;
+use crate::utils::string_parser::parse_string_literal;
 
 pub fn print_var<R: gimli::Reader>(session: &DebugSession<R>, path: Option<&Path>) -> Result<()> {
     let printer = Printer::new(session);
@@ -65,7 +66,7 @@ pub fn set_var<R: gimli::Reader>(session: &DebugSession<R>, path: &Path, value: 
             buf.put_u64_ne(ptr);
         }
         Type::String(_) => {
-            let new_str: String = serde_json::from_str(value).map_err(|_| DebuggerError::InvalidValue)?;
+            let new_str = parse_string_literal(value).map_err(|_| DebuggerError::InvalidValue)?;
             let new_str_addr = session.alloc_c_string(&new_str)?;
             buf.put_u64_ne(new_str_addr);
         }
