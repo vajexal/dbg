@@ -458,7 +458,7 @@ impl DwarfParser {
                         Some(value) => value as usize,
                         None => return Ok(ArrayCount::Dynamic(entry_ref)),
                     },
-                    None => bail!("array no upper bound"),
+                    None => return Ok(ArrayCount::Flexible),
                 };
 
                 let lower_bound = match entry.attr_value(gimli::DW_AT_lower_bound)? {

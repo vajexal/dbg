@@ -149,6 +149,36 @@ int main()
     )
 
 
+def test_fam(debugger):
+    debugger(
+        code="""#include <stdlib.h>
+
+typedef struct {
+    int n;
+    int a[];
+} Foo;
+
+int main()
+{
+    int n = 10;
+    Foo *foo = malloc(sizeof(Foo) + n * sizeof(int));
+    for (int i = 0; i < n; i++) {
+        foo->a[i] = i;
+    }
+    return 0;
+}
+
+""",
+        steps=[
+            Step("b 12", "breakpoint set"),
+            Step("r"),
+            Step("p foo.a", "int[] a = [...]"),
+            Step("c"),
+            Step("q"),
+        ]
+    )
+
+
 def test_volatile(debugger):
     debugger(
         code="""#include <stdio.h>

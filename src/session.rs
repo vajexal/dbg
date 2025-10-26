@@ -866,6 +866,7 @@ impl<R: gimli::Reader> DebugSession<R> {
         match count {
             ArrayCount::Static(value) => Ok(value),
             ArrayCount::Dynamic(entry_ref) => self.get_vla_size(entry_ref),
+            ArrayCount::Flexible => Ok(0),
         }
     }
 

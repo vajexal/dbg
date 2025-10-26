@@ -81,6 +81,7 @@ pub struct UnionField {
 pub enum ArrayCount<R: gimli::Reader> {
     Static(usize),
     Dynamic(EntryRef<R::Offset>),
+    Flexible,
 }
 
 #[derive(Debug)]

@@ -1,11 +1,12 @@
-use std::io::{self, Write};
+use std::io;
+use std::io::Write;
 
 use anyhow::{bail, Result};
 use bytes::Buf;
 
 use crate::error::DebuggerError;
 use crate::session::DebugSession;
-use crate::types::{Type, TypeId};
+use crate::types::{ArrayCount, Type, TypeId};
 use crate::var::{Value, Var};
 
 pub struct Printer<'a, R: gimli::Reader> {
@@ -58,8 +59,8 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
             Type::Array { subtype_id, count } => {
                 self.print_type(f, subtype_id)?;
                 match count {
-                    crate::types::ArrayCount::Static(count) => write!(f, "[{}]", count)?,
-                    crate::types::ArrayCount::Dynamic(_) => write!(f, "[]")?,
+                    ArrayCount::Static(count) => write!(f, "[{}]", count)?,
+                    ArrayCount::Dynamic(_) | ArrayCount::Flexible => write!(f, "[]")?,
                 };
             }
             Type::Struct { name, fields, .. } => match name {
@@ -178,8 +179,12 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                 write!(f, "{:?}", s)?;
             }
             Type::Array { subtype_id, count } => {
+                let count = match count {
+                    ArrayCount::Flexible => return Ok(write!(f, "[...]")?),
+                    _ => self.session.get_array_count(count)?,
+                };
                 let subtype_size = self.session.get_type_size(subtype_id)?;
-                let count = self.session.get_array_count(count)?;
+
                 write!(f, "[")?;
                 for i in 0..count {
                     if i != 0 {
