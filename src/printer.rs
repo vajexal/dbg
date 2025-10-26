@@ -57,7 +57,10 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
             }
             Type::Array { subtype_id, count } => {
                 self.print_type(f, subtype_id)?;
-                write!(f, "[{}]", count)?;
+                match count {
+                    crate::types::ArrayCount::Static(count) => write!(f, "[{}]", count)?,
+                    crate::types::ArrayCount::Dynamic(_) => write!(f, "[]")?,
+                };
             }
             Type::Struct { name, fields, .. } => match name {
                 Some(name) => write!(f, "{}", name)?,
@@ -175,7 +178,8 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                 write!(f, "{:?}", s)?;
             }
             Type::Array { subtype_id, count } => {
-                let subtype_size = self.session.get_type_storage().get_type_size(subtype_id)?;
+                let subtype_size = self.session.get_type_size(subtype_id)?;
+                let count = self.session.get_array_count(count)?;
                 write!(f, "[")?;
                 for i in 0..count {
                     if i != 0 {

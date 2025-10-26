@@ -213,6 +213,29 @@ int main()
     )
 
 
+def test_vla(debugger):
+    debugger(
+        code="""#include <stdio.h>
+
+int main()
+{
+    int n = 3;
+    int a[n];
+    printf("%d\\n", a[1]);
+    return 0;
+}
+""",
+        steps=[
+            Step("b 7", "breakpoint set"),
+            Step("r"),
+            Step("set a[0] = 10"),
+            Step("p a", "int[] a = [10, "),
+            Step("c"),
+            Step("q"),
+        ]
+    )
+
+
 def test_func(debugger):
     debugger(
         code="""#include <stdio.h>

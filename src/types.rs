@@ -1,15 +1,14 @@
-use std::{cell::RefCell, rc::Rc};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use thiserror::Error;
 
-use crate::consts::WORD_SIZE;
+use crate::loc_finder::EntryRef;
 
 #[derive(Debug, Error)]
 pub enum TypeError {
     #[error("invalid type id {0}")]
     InvalidTypeId(TypeId),
-    #[error("type {0} has no size")]
-    HasNoSize(TypeId),
 }
 
 pub type TypeId = usize;
@@ -18,7 +17,7 @@ pub const VOID_TYPE_ID: TypeId = 0;
 type Result<T> = std::result::Result<T, TypeError>;
 
 #[derive(Debug, Clone)]
-pub enum Type {
+pub enum Type<R: gimli::Reader> {
     Void,
     Base {
         name: Rc<str>,
@@ -32,7 +31,7 @@ pub enum Type {
     String(TypeId),
     Array {
         subtype_id: TypeId,
-        count: usize,
+        count: ArrayCount<R>,
     },
     Struct {
         name: Option<Rc<str>>,
@@ -78,25 +77,31 @@ pub struct UnionField {
     pub type_id: TypeId,
 }
 
-#[derive(Debug)]
-pub struct TypeStorage {
-    types: RefCell<Vec<Type>>,
+#[derive(Debug, Clone)]
+pub enum ArrayCount<R: gimli::Reader> {
+    Static(usize),
+    Dynamic(EntryRef<R::Offset>),
 }
 
-impl TypeStorage {
+#[derive(Debug)]
+pub struct TypeStorage<R: gimli::Reader> {
+    types: RefCell<Vec<Type<R>>>,
+}
+
+impl<R: gimli::Reader> TypeStorage<R> {
     pub fn new() -> Self {
         Self {
             types: RefCell::new(vec![Type::Void]),
         }
     }
 
-    pub fn add(&mut self, typ: Type) -> TypeId {
+    pub fn add(&mut self, typ: Type<R>) -> TypeId {
         let mut types = self.types.borrow_mut();
         types.push(typ);
         types.len() - 1
     }
 
-    pub fn replace(&mut self, type_id: TypeId, typ: Type) -> Result<()> {
+    pub fn replace(&mut self, type_id: TypeId, typ: Type<R>) -> Result<()> {
         let mut types = self.types.borrow_mut();
         if type_id < types.len() {
             types[type_id] = typ;
@@ -106,24 +111,11 @@ impl TypeStorage {
         }
     }
 
-    pub fn get(&self, type_id: TypeId) -> Result<Type> {
+    pub fn get(&self, type_id: TypeId) -> Result<Type<R>> {
         self.types.borrow().get(type_id).cloned().ok_or(TypeError::InvalidTypeId(type_id))
     }
 
-    pub fn get_type_size(&self, type_id: TypeId) -> Result<usize> {
-        match self.get(type_id)? {
-            Type::Void | Type::FuncDef { .. } => Err(TypeError::HasNoSize(type_id)),
-            Type::Base { size, .. } | Type::Struct { size, .. } | Type::Enum { size, .. } | Type::Union { size, .. } => Ok(size as usize),
-            Type::Const(subtype_id) | Type::Volatile(subtype_id) | Type::Atomic(subtype_id) | Type::Typedef(_, subtype_id) => self.get_type_size(subtype_id),
-            Type::Pointer(_) | Type::String(_) | Type::Func(_) => Ok(WORD_SIZE),
-            Type::Array { subtype_id, count } => {
-                let subtype_size = self.get_type_size(subtype_id)?;
-                Ok(subtype_size * count)
-            }
-        }
-    }
-
-    pub fn unwind_type(&self, type_id: TypeId) -> Result<Type> {
+    pub fn unwind_type(&self, type_id: TypeId) -> Result<Type<R>> {
         match self.get(type_id)? {
             Type::Const(subtype_id) | Type::Volatile(subtype_id) | Type::Atomic(subtype_id) | Type::Typedef(_, subtype_id) => self.unwind_type(subtype_id),
             typ => Ok(typ),

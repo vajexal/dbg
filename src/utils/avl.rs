@@ -98,7 +98,7 @@ impl<T: PartialOrd> AVLTree<T> {
     }
 
     #[allow(dead_code)]
-    pub fn iter(&self) -> AVLTreeIterator<T> {
+    pub fn iter(&self) -> AVLTreeIterator<'_, T> {
         AVLTreeIterator {
             stack: Vec::new(),
             current_node: self.root.as_deref(),

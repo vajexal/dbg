@@ -6,12 +6,12 @@ use std::rc::Rc;
 use anyhow::{anyhow, bail, Context, Result};
 
 use crate::loc_finder::{EntryRef, LocFinder, VarRef};
-use crate::types::{EnumVariant, Field, Type, TypeId, TypeStorage, UnionField, VOID_TYPE_ID};
+use crate::types::{ArrayCount, EnumVariant, Field, Type, TypeId, TypeStorage, UnionField, VOID_TYPE_ID};
 
 pub struct DwarfParser;
 
 impl DwarfParser {
-    pub fn parse<R: gimli::Reader>(dwarf: &gimli::Dwarf<R>, base_address: u64) -> Result<(LocFinder<R>, TypeStorage)> {
+    pub fn parse<R: gimli::Reader>(dwarf: &gimli::Dwarf<R>, base_address: u64) -> Result<(LocFinder<R>, TypeStorage<R>)> {
         let mut loc_finder = LocFinder::new(base_address);
         let mut type_storage = TypeStorage::new();
 
@@ -29,7 +29,7 @@ impl DwarfParser {
         Ok((loc_finder, type_storage))
     }
 
-    fn process_unit<R: gimli::Reader>(loc_finder: &mut LocFinder<R>, type_storage: &mut TypeStorage, unit_ref: &gimli::UnitRef<R>) -> Result<()> {
+    fn process_unit<R: gimli::Reader>(loc_finder: &mut LocFinder<R>, type_storage: &mut TypeStorage<R>, unit_ref: &gimli::UnitRef<R>) -> Result<()> {
         // todo iterate all entries
         let mut tree = unit_ref.entries_tree(None)?;
         let root = tree.root()?;
@@ -78,7 +78,7 @@ impl DwarfParser {
 
     fn process_subprogram<R: gimli::Reader>(
         loc_finder: &mut LocFinder<R>,
-        type_storage: &mut TypeStorage,
+        type_storage: &mut TypeStorage<R>,
         unit_ref: &gimli::UnitRef<R>,
         entry: &gimli::DebuggingInformationEntry<R>,
         visited_types: &mut HashMap<gimli::UnitOffset<R::Offset>, TypeId>,
@@ -131,7 +131,7 @@ impl DwarfParser {
 
     fn process_var<R: gimli::Reader>(
         loc_finder: &mut LocFinder<R>,
-        type_storage: &mut TypeStorage,
+        type_storage: &mut TypeStorage<R>,
         unit_ref: &gimli::UnitRef<R>,
         entry: &gimli::DebuggingInformationEntry<R>,
         func_name: Option<Rc<str>>,
@@ -155,7 +155,7 @@ impl DwarfParser {
     }
 
     fn process_entry_type<R: gimli::Reader>(
-        type_storage: &mut TypeStorage,
+        type_storage: &mut TypeStorage<R>,
         unit_ref: &gimli::UnitRef<R>,
         entry: &gimli::DebuggingInformationEntry<R>,
         visited_types: &mut HashMap<gimli::UnitOffset<R::Offset>, TypeId>,
@@ -174,7 +174,7 @@ impl DwarfParser {
     }
 
     fn process_type<R: gimli::Reader>(
-        type_storage: &mut TypeStorage,
+        type_storage: &mut TypeStorage<R>,
         unit_ref: &gimli::UnitRef<R>,
         entry: &gimli::DebuggingInformationEntry<R>,
         visited_types: &mut HashMap<gimli::UnitOffset<R::Offset>, TypeId>,
@@ -234,38 +234,20 @@ impl DwarfParser {
             gimli::DW_TAG_array_type => {
                 let subtype_id = Self::process_entry_type(type_storage, unit_ref, entry, visited_types)?;
                 let dimensions = Self::map_subtree(unit_ref, entry, gimli::DW_TAG_subrange_type, |child_entry| {
-                    let count = match child_entry.attr_value(gimli::DW_AT_count)? {
-                        Some(value) => value.udata_value().ok_or(anyhow!("get count attr value"))?,
-                        None => {
-                            let lower_bound = match child_entry.attr_value(gimli::DW_AT_lower_bound)? {
-                                Some(value) => value.udata_value().ok_or(anyhow!("get lower bound attr value"))?,
-                                None => 0,
-                            };
-
-                            let upper_bound = child_entry
-                                .attr_value(gimli::DW_AT_upper_bound)?
-                                .ok_or(anyhow!("no attributes to find dimension upper bound"))?
-                                .udata_value()
-                                .ok_or(anyhow!("get upper bound attr value"))?;
-
-                            upper_bound - lower_bound + 1
-                        }
-                    };
-
-                    Ok(count as usize)
+                    Self::get_array_count(unit_ref, child_entry)
                 })?;
 
+                let first_dimension = dimensions[0].clone();
                 // create type for every nested dimension
                 let subtype_id = dimensions
-                    .iter()
+                    .into_iter()
                     .skip(1)
-                    .copied()
                     .rev()
                     .fold(subtype_id, |subtype_id, count| type_storage.add(Type::Array { subtype_id, count }));
 
                 Type::Array {
                     subtype_id,
-                    count: dimensions[0],
+                    count: first_dimension,
                 }
             }
             gimli::DW_TAG_structure_type => {
@@ -458,5 +440,37 @@ impl DwarfParser {
         }
 
         Ok(())
+    }
+
+    fn get_array_count<R: gimli::Reader>(unit_ref: &gimli::UnitRef<R>, entry: &gimli::DebuggingInformationEntry<R>) -> Result<ArrayCount<R>> {
+        let unit_offset = unit_ref.header.offset().as_debug_info_offset().ok_or(anyhow!("can't get debug_info offest"))?;
+        let entry_offset = entry.offset();
+        let entry_ref = EntryRef::new(unit_offset, entry_offset);
+
+        match entry.attr_value(gimli::DW_AT_count)? {
+            Some(value) => match value.udata_value() {
+                Some(value) => Ok(ArrayCount::Static(value as usize)),
+                None => Ok(ArrayCount::Dynamic(entry_ref)),
+            },
+            None => {
+                let upper_bound = match entry.attr_value(gimli::DW_AT_upper_bound)? {
+                    Some(value) => match value.udata_value() {
+                        Some(value) => value as usize,
+                        None => return Ok(ArrayCount::Dynamic(entry_ref)),
+                    },
+                    None => bail!("array no upper bound"),
+                };
+
+                let lower_bound = match entry.attr_value(gimli::DW_AT_lower_bound)? {
+                    Some(value) => match value.udata_value() {
+                        Some(value) => value as usize,
+                        None => return Ok(ArrayCount::Dynamic(entry_ref)),
+                    },
+                    None => 0,
+                };
+
+                Ok(ArrayCount::Static(upper_bound - lower_bound + 1))
+            }
+        }
     }
 }

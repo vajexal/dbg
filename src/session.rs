@@ -11,11 +11,11 @@ use crate::breakpoint::Breakpoint;
 use crate::consts::{FUNC_PROLOGUE_MAGIC_BYTES, WORD_SIZE};
 use crate::context::Context;
 use crate::error::DebuggerError;
-use crate::loc_finder::{LocFinder, VarRef};
+use crate::loc_finder::{EntryRef, LocFinder, VarRef};
 use crate::location::{TypedValueLoc, ValueLoc};
 use crate::path::{Path, PostfixOperator, PrefixOperator};
 use crate::trap::Trap;
-use crate::types::{Type, TypeStorage};
+use crate::types::{ArrayCount, Type, TypeId, TypeStorage};
 use crate::unwinder::Unwinder;
 use crate::var::{Value, Var};
 
@@ -38,7 +38,7 @@ pub struct DebugSession<R: gimli::Reader> {
     dwarf: gimli::Dwarf<R>,
     unwinder: Unwinder<R>,
     loc_finder: LocFinder<R>,
-    type_storage: TypeStorage,
+    type_storage: TypeStorage<R>,
     child: process::Child,
     base_address: u64,
     breakpoints: HashMap<u64, Breakpoint>,
@@ -50,7 +50,7 @@ impl<R: gimli::Reader> DebugSession<R> {
         child: process::Child,
         dwarf: gimli::Dwarf<R>,
         loc_finder: LocFinder<R>,
-        type_storage: TypeStorage,
+        type_storage: TypeStorage<R>,
         unwinder: Unwinder<R>,
         base_address: u64,
     ) -> Self {
@@ -67,7 +67,7 @@ impl<R: gimli::Reader> DebugSession<R> {
         }
     }
 
-    pub fn get_type_storage(&self) -> &TypeStorage {
+    pub fn get_type_storage(&self) -> &TypeStorage<R> {
         &self.type_storage
     }
 
@@ -465,14 +465,9 @@ impl<R: gimli::Reader> DebugSession<R> {
 
         let location = entry.attr_value(gimli::DW_AT_location)?.ok_or(anyhow!("get location attr"))?;
         let expr = location.exprloc_value().ok_or(anyhow!("get exprloc"))?;
-        let evaluation = self.eval_expr(expr, &unit_ref, func)?;
-        let mut pieces = evaluation.result();
-        if !(pieces.len() == 1 && pieces[0].size_in_bits.is_none()) {
-            bail!("can't read composite location");
-        }
-        let location = pieces.remove(0).location;
+        let loc = self.evaluate(unit_ref, expr, func)?;
 
-        Ok(TypedValueLoc::new(location.try_into()?, var_ref.type_id))
+        Ok(TypedValueLoc::new(loc, var_ref.type_id))
     }
 
     fn get_value_by_var_ref(&self, func: &str, var_ref: VarRef<R::Offset>) -> Result<Value> {
@@ -512,11 +507,12 @@ impl<R: gimli::Reader> DebugSession<R> {
                 },
                 PostfixOperator::Index(index) => match self.type_storage.get(loc.type_id)? {
                     Type::Array { subtype_id, count } => {
+                        let count = self.get_array_count(count)?;
                         if index >= count {
                             bail!(DebuggerError::InvalidPath);
                         }
 
-                        let subtype_size = self.type_storage.get_type_size(subtype_id)?;
+                        let subtype_size = self.get_type_size(subtype_id)?;
                         self.unwind_loc(
                             TypedValueLoc::new(loc.location.with_offset(index * subtype_size)?, subtype_id),
                             &postfix_operators[1..],
@@ -583,7 +579,23 @@ impl<R: gimli::Reader> DebugSession<R> {
         Ok(Rc::from(name))
     }
 
-    fn eval_expr(&self, expr: gimli::Expression<R>, unit_ref: &gimli::UnitRef<R>, current_func: &str) -> Result<gimli::Evaluation<R>> {
+    fn evaluate(&self, unit_ref: gimli::UnitRef<R>, expr: gimli::Expression<R>, func: &str) -> Result<ValueLoc> {
+        let func_entry_ref = self.loc_finder.find_func(func).ok_or(anyhow!("no current func"))?;
+        let func_entry = unit_ref.entry(func_entry_ref.entry_offset)?;
+
+        let evaluation = self.exec(unit_ref, expr, &func_entry)?;
+        let mut pieces = evaluation.result();
+        if !(pieces.len() == 1 && pieces[0].size_in_bits.is_none()) {
+            bail!("can't read composite location");
+        }
+
+        let location = pieces.remove(0).location;
+        log::trace!("evaluation location {:?}", location);
+
+        Ok(location.try_into()?)
+    }
+
+    fn exec(&self, unit_ref: gimli::UnitRef<R>, expr: gimli::Expression<R>, func_entry: &gimli::DebuggingInformationEntry<R>) -> Result<gimli::Evaluation<R>> {
         let mut eval = expr.evaluation(unit_ref.encoding());
         let mut result = eval.evaluate()?;
 
@@ -591,11 +603,9 @@ impl<R: gimli::Reader> DebugSession<R> {
             match result {
                 gimli::EvaluationResult::Complete => break,
                 gimli::EvaluationResult::RequiresFrameBase => {
-                    let entry_ref = self.loc_finder.find_func(current_func).ok_or(anyhow!("no current func"))?;
-                    let entry = unit_ref.entry(entry_ref.entry_offset)?;
-                    let frame_base_attr = entry.attr_value(gimli::DW_AT_frame_base)?.ok_or(anyhow!("get frame base attr"))?;
+                    let frame_base_attr = func_entry.attr_value(gimli::DW_AT_frame_base)?.ok_or(anyhow!("get frame base attr"))?;
                     let fram_base_expr = frame_base_attr.exprloc_value().ok_or(anyhow!("get exprloc"))?; // todo loclists
-                    let frame_base_comleted_evaluation = self.eval_expr(fram_base_expr, unit_ref, current_func)?;
+                    let frame_base_comleted_evaluation = self.exec(unit_ref, fram_base_expr, func_entry)?;
                     let frame_base = frame_base_comleted_evaluation
                         .value_result()
                         .ok_or(anyhow!("get value result"))?
@@ -615,7 +625,7 @@ impl<R: gimli::Reader> DebugSession<R> {
                         }
                         gimli::CfaRule::Expression(unwind_expression) => {
                             let expression = self.unwinder.unwind_expression(&unwind_expression)?;
-                            let evaluation = self.eval_expr(expression, unit_ref, current_func)?;
+                            let evaluation = self.exec(unit_ref, expression, func_entry)?;
                             let value = evaluation.value_result().ok_or(anyhow!("get value result"))?;
                             value.to_u64(!0u64)?
                         }
@@ -627,6 +637,18 @@ impl<R: gimli::Reader> DebugSession<R> {
                 gimli::EvaluationResult::RequiresRelocatedAddress(address) => {
                     log::trace!("requires relocated address {:#x}", address);
                     result = eval.resume_with_relocated_address(self.base_address + address)?;
+                }
+                gimli::EvaluationResult::RequiresMemory { address, size, .. } => {
+                    log::trace!("requires memory {} bytes at {:#x}", size, address);
+                    let mut buf = self.read_address(address, size as usize)?;
+                    let value = match size {
+                        1 => gimli::Value::U8(buf.get_u8()),
+                        2 => gimli::Value::U16(buf.get_u16_ne()),
+                        4 => gimli::Value::U32(buf.get_u32_ne()),
+                        8 => gimli::Value::U64(buf.get_u64_ne()),
+                        _ => bail!("unsupported byte size"),
+                    };
+                    result = eval.resume_with_memory(value)?;
                 }
                 _ => bail!("can't provide {:?}", result),
             }
@@ -711,7 +733,7 @@ impl<R: gimli::Reader> DebugSession<R> {
     }
 
     fn read_loc(&self, loc: &TypedValueLoc) -> Result<Bytes> {
-        let size = self.type_storage.get_type_size(loc.type_id)?;
+        let size = self.get_type_size(loc.type_id)?;
         let mut buf = vec![0; size];
 
         log::trace!("read {} bytes from {:?}", size, loc);
@@ -838,5 +860,58 @@ impl<R: gimli::Reader> DebugSession<R> {
         ptrace::setregs(self.child_pid(), original_regs)?; // restore registers
 
         Ok(regs.rax)
+    }
+
+    pub fn get_array_count(&self, count: ArrayCount<R>) -> Result<usize> {
+        match count {
+            ArrayCount::Static(value) => Ok(value),
+            ArrayCount::Dynamic(entry_ref) => self.get_vla_size(entry_ref),
+        }
+    }
+
+    pub fn get_type_size(&self, type_id: TypeId) -> Result<usize> {
+        match self.type_storage.get(type_id)? {
+            Type::Void | Type::FuncDef { .. } => Err(anyhow!("type has no size")),
+            Type::Base { size, .. } | Type::Struct { size, .. } | Type::Enum { size, .. } | Type::Union { size, .. } => Ok(size as usize),
+            Type::Const(subtype_id) | Type::Volatile(subtype_id) | Type::Atomic(subtype_id) | Type::Typedef(_, subtype_id) => self.get_type_size(subtype_id),
+            Type::Pointer(_) | Type::String(_) | Type::Func(_) => Ok(WORD_SIZE),
+            Type::Array { subtype_id, count } => {
+                let subtype_size = self.get_type_size(subtype_id)?;
+                let count = self.get_array_count(count)?;
+                Ok(subtype_size * count)
+            }
+        }
+    }
+
+    fn get_vla_size(&self, entry_ref: EntryRef<R::Offset>) -> Result<usize> {
+        let unit_header = self.dwarf.debug_info.header_from_offset(entry_ref.unit_offset)?;
+        let unit = self.dwarf.unit(unit_header)?;
+        let unit_ref = unit.unit_ref(&self.dwarf);
+        let entry = unit_ref.entry(entry_ref.entry_offset)?;
+
+        let ip = self.get_ip()?;
+        let func = self.loc_finder.find_func_by_address(ip).ok_or(anyhow!("get current func"))?;
+        let func_entry_ref = self.loc_finder.find_func(&func).ok_or(anyhow!("no current func"))?;
+        let func_entry = unit_ref.entry(func_entry_ref.entry_offset)?;
+
+        let exec_attr = |value: gimli::AttributeValue<R>| -> Result<usize> {
+            let expr = value.exprloc_value().ok_or(anyhow!("get attr expr"))?;
+            let evaluation = self.exec(unit_ref, expr, &func_entry)?;
+            let value = evaluation.value_result().ok_or(anyhow!("get expr value result"))?;
+            Ok(value.to_u64(!0u64)? as usize)
+        };
+
+        match entry.attr_value(gimli::DW_AT_count)? {
+            Some(value) => exec_attr(value),
+            None => {
+                let upper_bound = exec_attr(entry.attr_value(gimli::DW_AT_upper_bound)?.ok_or(anyhow!("get upper bound"))?)?;
+                let lower_bound = match entry.attr_value(gimli::DW_AT_lower_bound)? {
+                    Some(value) => exec_attr(value)?,
+                    None => 0,
+                };
+
+                Ok(upper_bound - lower_bound + 1)
+            }
+        }
     }
 }
