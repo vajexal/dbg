@@ -149,6 +149,25 @@ int main()
     )
 
 
+def test_zero_len_vla(debugger):
+    debugger(
+        code="""int main()
+{
+    int n = 0;
+    int a[n];
+    return 0;
+}
+""",
+        steps=[
+            Step("b 5", "breakpoint set"),
+            Step("r"),
+            Step("p a", "int[] a = []"),
+            Step("c"),
+            Step("q"),
+        ]
+    )
+
+
 def test_fam(debugger):
     debugger(
         code="""#include <stdlib.h>

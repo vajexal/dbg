@@ -911,7 +911,8 @@ impl<R: gimli::Reader> DebugSession<R> {
                     None => 0,
                 };
 
-                Ok(upper_bound - lower_bound + 1)
+                // upper_bound could be -1 on zero len vla
+                Ok((upper_bound as i64 - lower_bound as i64 + 1) as usize)
             }
         }
     }
