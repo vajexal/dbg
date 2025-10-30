@@ -734,8 +734,11 @@ impl<R: gimli::Reader> DebugSession<R> {
 
     fn read_loc(&self, loc: &TypedValueLoc) -> Result<Bytes> {
         let size = self.get_type_size(loc.type_id)?;
-        let mut buf = vec![0; size];
+        if size == 0 {
+            return Ok(Bytes::new());
+        }
 
+        let mut buf = vec![0; size];
         log::trace!("read {} bytes from {:?}", size, loc);
 
         match loc.location {

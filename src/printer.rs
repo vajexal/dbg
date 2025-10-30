@@ -196,6 +196,10 @@ impl<'a, R: gimli::Reader> Printer<'a, R> {
                 write!(f, "]")?;
             }
             Type::Struct { fields, .. } => {
+                if fields.is_empty() {
+                    return Ok(write!(f, "{{}}")?);
+                }
+
                 write!(f, "{{ ")?;
 
                 for (i, field) in fields.iter().enumerate() {

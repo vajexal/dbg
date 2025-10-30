@@ -252,7 +252,7 @@ impl DwarfParser {
             }
             gimli::DW_TAG_structure_type => {
                 let name = Self::get_optional_name(unit_ref, entry)?;
-                let size = Self::get_byte_size(entry)?;
+                let size = if Self::is_declaration(entry)? { 0 } else { Self::get_byte_size(entry)? };
 
                 let fields = Self::map_subtree(unit_ref, entry, gimli::DW_TAG_member, |child_entry| {
                     let member_name = Self::get_name(unit_ref, child_entry)?;
@@ -386,6 +386,16 @@ impl DwarfParser {
             .ok_or(anyhow!("get byte size value"))?
             .u16_value()
             .ok_or(anyhow!("convert byte size to u16"))
+    }
+
+    fn is_declaration<R: gimli::Reader>(entry: &gimli::DebuggingInformationEntry<R>) -> Result<bool> {
+        match entry.attr_value(gimli::DW_AT_declaration)? {
+            Some(value) => match value {
+                gimli::AttributeValue::Flag(value) => Ok(value),
+                _ => bail!("unexpected declaration attr value"),
+            },
+            None => Ok(false),
+        }
     }
 
     fn map_subtree<R, F, T>(unit_ref: &gimli::UnitRef<R>, entry: &gimli::DebuggingInformationEntry<R>, entry_tag: gimli::DwTag, mut f: F) -> Result<Vec<T>>

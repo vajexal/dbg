@@ -149,6 +149,29 @@ int main()
     )
 
 
+def test_print_empty_struct(debugger):
+    debugger(
+        code="""#include <stdio.h>
+
+struct Foo;
+
+int main()
+{
+    struct Foo *foo;
+    printf("%p\\n", foo);
+    return 0;
+}
+""",
+        steps=[
+            Step("b 8", "breakpoint set"),
+            Step("r"),
+            Step("p *foo", "Foo *foo = {}"),
+            Step("c"),
+            Step("q"),
+        ]
+    )
+
+
 def test_zero_len_vla(debugger):
     debugger(
         code="""int main()
